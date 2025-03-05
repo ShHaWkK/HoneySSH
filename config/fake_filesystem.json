@@ -1,0 +1,17 @@
+{
+    "home": {
+        "user": {
+            "readme.txt": "Bienvenue sur le serveur SSH.\nVos actions sont enregistrées.",
+            "secret.txt": "Ceci est un fichier confidentiel !"
+        },
+        "admin": {
+            "log.txt": "Dernière connexion: 2025-01-13 14:05",
+            "passwords.txt": "admin:SuperSecurePass123"
+        }
+    },
+    "var": {
+        "log": {
+            "auth.log": "Tentative de connexion suspecte détectée."
+        }
+    }
+}

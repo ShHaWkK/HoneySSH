@@ -3,21 +3,17 @@ import threading
 import os
 import json
 import time
-import sys
-import logging
+from services.database import log_ssh_attempt
 
-
-# Configuration du serveur SSH
+# Configuration
 HOST = "0.0.0.0"
 PORT = 2222
 LOG_DIR = "logs/"
 FS_FILE = "config/fake_filesystem.json"
 BLOCKED_IPS_FILE = LOG_DIR + "blocked_ips.log"
-FAILED_ATTEMPTS_FILE = LOG_DIR + "failed_attempts.log"
 MAX_FAILED_ATTEMPTS = 5
-BLOCK_TIME = 300  # Temps de blocage en secondes
+BLOCK_TIME = 300  # 5 minutes de blocage
 
-# Stockage des IP bloquées et tentatives échouées
 failed_attempts = {}
 blocked_ips = {}
 
@@ -42,22 +38,22 @@ def record_failed_attempt(ip):
         return True
     return False
 
-# Fonction pour simuler un shell interactif
+# Simuler une session SSH
 def simulate_shell(client_socket, addr):
     ip = addr[0]
-    current_path = ["home", "user"]
+    current_path = ["home", "admin"]
     filesystem = load_filesystem()
 
     if is_ip_blocked(ip):
-        client_socket.send("Connexion refusée. Votre IP est bloquée.\n".encode("utf-8"))
+        client_socket.send("Vous êtes bloqué pour 5 minutes.\n".encode("utf-8"))
         client_socket.close()
         return
 
-    print(f"[+] Connexion SSH de {addr}")
+    print(f"[+] Connexion SSH de {ip}")
     with open(LOG_DIR + "ssh_interactions.log", "a") as log:
-        log.write(f"Connexion SSH de {addr}\n")
+        log.write(f"Connexion SSH de {ip}\n")
 
-    client_socket.send(b"Bienvenue sur le serveur SSH fictif.\n")
+    client_socket.send(b"Bienvenue sur le serveur SSH factice.\n")
 
     while True:
         try:
@@ -67,8 +63,7 @@ def simulate_shell(client_socket, addr):
             if not command:
                 break
 
-            with open(LOG_DIR + "ssh_interactions.log", "a") as log:
-                log.write(f"{addr} -> {command}\n")
+            log_ssh_attempt(ip, command)
 
             if command == "ls":
                 folder = filesystem
@@ -79,9 +74,7 @@ def simulate_shell(client_socket, addr):
 
             elif command.startswith("cd"):
                 _, *path = command.split()
-                if not path:
-                    current_path = ["home", "user"]
-                elif path[0] in filesystem.get(current_path[-1], {}):
+                if path[0] in filesystem.get(current_path[-1], {}):
                     current_path.append(path[0])
                 else:
                     client_socket.send("Répertoire introuvable.\n".encode("utf-8"))
@@ -95,11 +88,11 @@ def simulate_shell(client_socket, addr):
                 client_socket.send(f"{response}\n".encode("utf-8"))
 
             elif command == "exit":
-                client_socket.send("Au revoir !\n".encode("utf-8"))
+                client_socket.send(b"Bye!\n")
                 break
 
             else:
-                client_socket.send("Commande introuvable.\n".encode("utf-8"))
+                client_socket.send(b"Commande inconnue.\n")
 
         except ConnectionResetError:
             break
@@ -116,11 +109,7 @@ def start_ssh_server():
 
     while True:
         client, addr = server.accept()
-        if is_ip_blocked(addr[0]):
-            client.send("Connexion refusée. Votre IP est bloquée.\n".encode("utf-8"))
-            client.close()
-        else:
-            threading.Thread(target=simulate_shell, args=(client, addr)).start()
+        threading.Thread(target=simulate_shell, args=(client, addr)).start()
 
 if __name__ == "__main__":
     start_ssh_server()

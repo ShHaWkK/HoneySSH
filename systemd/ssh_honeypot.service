@@ -1,0 +1,12 @@
+[Unit]
+Description=SSH Honeypot Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/user/services/ssh/ssh_honeypot.py
+WorkingDirectory=/home/user/services/ssh
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target

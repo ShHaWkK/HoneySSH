@@ -1,0 +1,10 @@
+Pour installer les dépendances : 
+
+- pip3 install -r requirements.txt
+
+Exécuter le firewall
+- chmod +x services/ssh/firewall.sh
+- sudo ./services/ssh/firewall.sh
+
+Lancer le honeypot SSH
+- python3 services/ssh/ssh_honeypot.py
