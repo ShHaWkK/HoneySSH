@@ -4,4 +4,3 @@ paramiko
 requests
 python-dotenv
 loguru
-sqlite3
