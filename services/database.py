@@ -1,21 +1,22 @@
 import sqlite3
 import os
+import json
 
-# Chemin de la base de données
+# Chemins des fichiers
 DB_DIR = "logs"
 DB_PATH = os.path.join(DB_DIR, "honeypot.db")
+USER_FILE = "config/fake_users.json"
 
 # Fonction pour initialiser la base de données
 def init_db():
-    # Vérifier et créer le dossier logs si nécessaire
+    """Initialise la base de données et crée les tables si elles n'existent pas"""
     if not os.path.exists(DB_DIR):
         os.makedirs(DB_DIR)
 
-    # Connexion à la base SQLite
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # Création des tables si elles n'existent pas
+    # Table des tentatives SSH
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS ssh_attempts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,6 +28,7 @@ def init_db():
     )
     """)
 
+    # Table des IP bloquées
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS blocked_ips (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,6 +42,7 @@ def init_db():
 
 # Fonction pour enregistrer une tentative SSH
 def log_ssh_attempt(ip, username, password, command):
+    """Log une tentative de connexion SSH en base de données"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -53,6 +56,7 @@ def log_ssh_attempt(ip, username, password, command):
 
 # Fonction pour bloquer une IP après trop de tentatives
 def block_ip(ip):
+    """Ajoute une IP à la liste des IP bloquées"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -65,6 +69,7 @@ def block_ip(ip):
 
 # Fonction pour vérifier si une IP est bloquée
 def is_ip_blocked(ip):
+    """Vérifie si une IP est bloquée"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -74,7 +79,16 @@ def is_ip_blocked(ip):
     result = cursor.fetchone()
 
     conn.close()
-    return result[0] > 0  # True si l'IP est bloquée, False sinon
+    return result[0] > 0  # Retourne True si l'IP est bloquée, False sinon
+
+# Fonction pour charger les faux utilisateurs
+def get_fake_users():
+    """Charge les faux utilisateurs depuis fake_users.json"""
+    if not os.path.exists(USER_FILE):
+        return {}
+
+    with open(USER_FILE, "r") as f:
+        return json.load(f)
 
 # Initialiser la base de données au démarrage
 init_db()
