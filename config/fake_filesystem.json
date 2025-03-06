@@ -1,17 +1,32 @@
 {
-    "home": {
-        "user": {
-            "readme.txt": "Bienvenue sur le serveur SSH.\nVos actions sont enregistrées.",
-            "secret.txt": "Ceci est un fichier confidentiel !"
+    "/": {
+        "home": {
+            "admin": {
+                "readme.txt": "Bienvenue sur le serveur SSH factice.",
+                "secret.txt": "Ceci est un fichier ultra confidentiel!",
+                "documents": {
+                    "report.pdf": "Fichier non lisible",
+                    "presentation.pptx": "Fichier non lisible"
+                }
+            },
+            "user": {
+                "notes.txt": "Liste des tâches personnelles",
+                "script.sh": "echo 'Hello world'"
+            }
         },
-        "admin": {
-            "log.txt": "Dernière connexion: 2025-01-13 14:05",
-            "passwords.txt": "admin:SuperSecurePass123"
-        }
-    },
-    "var": {
-        "log": {
-            "auth.log": "Tentative de connexion suspecte détectée."
+        "etc": {
+            "passwd": "root:x:0:0:root:/root:/bin/bash\nadmin:x:1001:1001:Admin User:/home/admin:/bin/bash",
+            "shadow": "root:$6$12345:18534:0:99999:7:::",
+            "hosts": "127.0.0.1 localhost\n192.168.1.1 router"
+        },
+        "var": {
+            "log": {
+                "auth.log": "Mar  5 12:34:56 sshd[1234]: Failed password for admin from 192.168.1.100 port 53422 ssh2",
+                "syslog": "Mar  5 12:34:56 kernel: [12345.678901] Firewall alert: Possible intrusion attempt detected"
+            }
+        },
+        "tmp": {
+            "cache.tmp": "Données temporaires"
         }
     }
 }
