@@ -1,3 +1,6 @@
+# Ceci est un fichier Python exemple
+#/usr/bin/env python3
+
 import socket
 import threading
 import os
@@ -65,12 +68,12 @@ def simulate_shell(client_socket, addr):
     current_path = ["/home", "admin"]
 
     if is_ip_blocked(ip):
-        client_socket.send(b"Votre IP est bloquée. Connexion refusée.\n")
+        client_socket.send("Vous êtes bloqué pour 5 minutes.\n".encode("utf-8"))
         client_socket.close()
         return
 
     if not fake_login(client_socket, ip):
-        client_socket.send(b"Accès refusé.\n")
+        client_socket.send("Accès refusé.\n".encode("utf-8"))
         client_socket.close()
         return
 
@@ -78,7 +81,7 @@ def simulate_shell(client_socket, addr):
     with open(LOG_DIR + "ssh_interactions.log", "a") as log:
         log.write(f"Connexion SSH de {ip}\n")
 
-    client_socket.send(b"Bienvenue sur le serveur SSH factice.\n")
+    client_socket.send("Bienvenue sur le serveur SSH factice.\n".encode("utf-8"))
 
     while True:
         try:
@@ -102,7 +105,7 @@ def simulate_shell(client_socket, addr):
                 if path and path[0] in filesystem:
                     current_path.append(path[0])
                 else:
-                    client_socket.send(b"Répertoire introuvable.\n")
+                    client_socket.send("Répertoire introuvable.\n".encode("utf-8"))
 
             elif command.startswith("cat"):
                 _, filename = command.split()
@@ -110,7 +113,7 @@ def simulate_shell(client_socket, addr):
                 client_socket.send(f"{response}\n".encode("utf-8"))
 
             elif command == "exit":
-                client_socket.send(b"Déconnexion...\n")
+                client_socket.send(b"Bye!\n")
                 break
 
             else:
