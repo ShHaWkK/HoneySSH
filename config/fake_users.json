@@ -1,0 +1,12 @@
+{
+    "admin": "admin123",
+    "root": "toor",
+    "user": "password",
+    "hacker": "letmein",
+    "guest": "guest123",
+    "test": "test123",
+    "developer": "devpass",
+    "sysadmin": "sysadmin123",
+    "security": "p@ssw0rd",
+    "backup": "backup123"
+}
