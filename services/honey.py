@@ -324,7 +324,7 @@ def handle_connection(client_socket, client_addr):
     try:
         # Configurer la bannière et la clé hôte du serveur
         transport.local_version = SSH_BANNER
-        host_key = paramiko.ECDSAKey.generate(bits=384)
+        host_key = paramiko.RSAKey(filename="my_host_key")
         transport.add_server_key(host_key)
         server = HoneyPotServer(client_ip)
         try:
