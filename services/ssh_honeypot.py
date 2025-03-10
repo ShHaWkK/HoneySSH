@@ -7,7 +7,7 @@ import time
 from database import log_ssh_attempt, get_fake_users, init_db
 
 # Configuration
-HOST = "127.0.0.1"
+HOST = "0.0.0.0"
 PORT = 2224
 LOG_DIR = "logs/"
 FS_FILE = os.path.join(os.path.dirname(__file__), "../config/fake_filesystem.json")
@@ -51,10 +51,16 @@ def record_failed_attempt(ip):
 def fake_login(client_socket, ip):
     client_socket.send(b"SSH-2.0-OpenSSH_7.9p1 Ubuntu-10\n")
     client_socket.send(b"login: ")
-    username = client_socket.recv(1024).decode(errors="ignore").strip()
+    try:
+        username = client_socket.recv(1024).decode(errors="ignore").strip()
+    except UnicodeDecodeError:
+        username = ""
 
     client_socket.send(b"password: ")
-    password = client_socket.recv(1024).decode(errors="ignore").strip()
+    try:
+        password = client_socket.recv(1024).decode(errors="ignore").strip()
+    except UnicodeDecodeError:
+        password = ""
     
     users = get_fake_users()
     if username in users and users[username] == password:
@@ -87,7 +93,10 @@ def simulate_shell(client_socket, addr):
     while True:
         try:
             client_socket.send(f"{'/'.join(current_path)} $ ".encode("utf-8"))
-            command = client_socket.recv(1024).decode(errors="ignore").strip()
+            try:
+                command = client_socket.recv(1024).decode(errors="ignore").strip()
+            except UnicodeDecodeError:
+                command = ""
             
             if not command:
                 break
@@ -135,9 +144,13 @@ def start_ssh_server():
     server.listen(5)
     print(f"[*] Serveur SSH en écoute sur {HOST}:{PORT}")
 
-    while True:
-        client, addr = server.accept()
-        threading.Thread(target=simulate_shell, args=(client, addr)).start()
+    try:
+        while True:
+            client, addr = server.accept()
+            threading.Thread(target=simulate_shell, args=(client, addr)).start()
+    except KeyboardInterrupt:
+        print("\n[*] Arrêt du serveur SSH.")
+        server.close()
 
 if __name__ == "__main__":
     start_ssh_server()
