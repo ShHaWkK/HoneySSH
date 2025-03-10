@@ -1,6 +1,3 @@
-# Ceci est un fichier Python exemple
-#/usr/bin/env python3
-
 import socket
 import threading
 import os
@@ -10,10 +7,11 @@ import time
 from database import log_ssh_attempt, get_fake_users, init_db
 
 # Configuration
-HOST = "0.0.0.0"
-PORT = 2222
+HOST = "127.0.0.1"
+PORT = 2224
 LOG_DIR = "logs/"
-FS_FILE = "config/fake_filesystem.json"
+FS_FILE = os.path.join(os.path.dirname(__file__), "../config/fake_filesystem.json")
+USER_FILE = os.path.join(os.path.dirname(__file__), "../config/fake_users.json")
 DB_PATH = "logs/honeypot.db"
 BLOCKED_IPS_FILE = LOG_DIR + "blocked_ips.log"
 MAX_FAILED_ATTEMPTS = 5
@@ -24,8 +22,12 @@ blocked_ips = {}
 
 # Charger les fichiers JSON
 def load_json(file_path):
-    with open(file_path, "r") as f:
-        return json.load(f)
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Erreur chargement {file_path}: {e}")
+        return {}
 
 filesystem = load_json(FS_FILE)
 
@@ -40,7 +42,7 @@ def record_failed_attempt(ip):
     failed_attempts[ip] = failed_attempts.get(ip, 0) + 1
     if failed_attempts[ip] >= MAX_FAILED_ATTEMPTS:
         blocked_ips[ip] = time.time()
-        with open(BLOCKED_IPS_FILE, "a") as f:
+        with open(BLOCKED_IPS_FILE, "a", encoding="utf-8") as f:
             f.write(f"{ip} - Bloqué pour brute-force\n")
         return True
     return False
@@ -48,13 +50,12 @@ def record_failed_attempt(ip):
 # Simuler un login SSH
 def fake_login(client_socket, ip):
     client_socket.send(b"SSH-2.0-OpenSSH_7.9p1 Ubuntu-10\n")
-    
     client_socket.send(b"login: ")
-    username = client_socket.recv(1024).decode().strip()
-    
-    client_socket.send(b"password: ")
-    password = client_socket.recv(1024).decode().strip()
+    username = client_socket.recv(1024).decode(errors="ignore").strip()
 
+    client_socket.send(b"password: ")
+    password = client_socket.recv(1024).decode(errors="ignore").strip()
+    
     users = get_fake_users()
     if username in users and users[username] == password:
         return True
@@ -78,7 +79,7 @@ def simulate_shell(client_socket, addr):
         return
 
     print(f"[+] Connexion SSH de {ip}")
-    with open(LOG_DIR + "ssh_interactions.log", "a") as log:
+    with open(LOG_DIR + "ssh_interactions.log", "a", encoding="utf-8") as log:
         log.write(f"Connexion SSH de {ip}\n")
 
     client_socket.send("Bienvenue sur le serveur SSH factice.\n".encode("utf-8"))
@@ -86,8 +87,8 @@ def simulate_shell(client_socket, addr):
     while True:
         try:
             client_socket.send(f"{'/'.join(current_path)} $ ".encode("utf-8"))
-            command = client_socket.recv(1024).decode("utf-8").strip()
-
+            command = client_socket.recv(1024).decode(errors="ignore").strip()
+            
             if not command:
                 break
 
@@ -129,6 +130,7 @@ def start_ssh_server():
     os.makedirs(LOG_DIR, exist_ok=True)
     init_db()
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((HOST, PORT))
     server.listen(5)
     print(f"[*] Serveur SSH en écoute sur {HOST}:{PORT}")
