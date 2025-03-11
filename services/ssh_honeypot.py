@@ -81,7 +81,7 @@ def save_history(username, history):
 # Fonction d'autocomplétion améliorée
 # =====================================
 def get_completions(current_input, current_dir, username, fs):
-    base_cmds = ["ls", "cd", "pwd", "whoami", "id", "uname", "echo", "cat", "rm", 
+    base_cmds = ["ls", "cd", "pwd", "whoami", "id", "uname", "echo", "cat", "rm",
                  "ps", "netstat", "uptime", "df", "exit", "logout", "find", "grep", "head", "tail", "history"]
     if " " not in current_input:
         return [cmd for cmd in base_cmds if cmd.startswith(current_input)]
@@ -111,7 +111,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
     parts = cmd.split(maxsplit=1)
     cmd_name = parts[0]
     arg_str = parts[1] if len(parts) > 1 else ""
-    
+
     def resolve_path(path):
         if not path.startswith("/"):
             full = (current_dir.rstrip("/") + "/" + path) if current_dir != "/" else "/" + path
@@ -314,6 +314,11 @@ def init_database():
 # Fonction de déclenchement d'alertes
 # =====================================
 def trigger_alert(session_id, command, client_ip, username):
+    """
+    Envoie une alerte par email via le SMTP Gmail (port 587, TLS).
+    Assurez-vous d'utiliser un mot de passe d'application ou 
+    un compte autorisant 'less secure apps' sur Gmail.
+    """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         conn = sqlite3.connect(DB_NAME)
@@ -326,17 +331,28 @@ def trigger_alert(session_id, command, client_ip, username):
         conn.close()
     except Exception as e:
         print(f"[!] Erreur lors de l'enregistrement de l'alerte en DB: {e}")
+
+    # Prépare le message
     subject = f"[HONEYPOT] Alerte commande suspecte de {client_ip}"
     body = f"Utilisateur: {username}\nCommande: {command}\nHeure: {timestamp}"
     msg = MIMEText(body)
-    msg["From"] = "alerte-honeypot@example.com"
+    msg["From"] = "alerte-honeypot@example.com"  # peut être la même que SMTP_USER
     msg["To"] = "admin@example.com"
     msg["Subject"] = subject
+
+    # Configuration SMTP Gmail
+    SMTP_HOST = "smtp.gmail.com"
+    SMTP_PORT = 587
+    SMTP_USER = "honeycute896@gmail.com"   # Remplacez par votre email Gmail
+    SMTP_PASS = "mgps uhqr ujux pbbf"       # Mot de passe d'application (ou votre pass si 'less secure apps')
+
     try:
-        with smtplib.SMTP("localhost") as smtp:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
+            smtp.starttls()
+            smtp.login(SMTP_USER, SMTP_PASS)
             smtp.send_message(msg)
     except Exception as e:
-        print(f"[!] Erreur lors de l'envoi du mail d'alerte: {e}")
+        print(f"[!] Erreur lors de l'envoi du mail d'alerte via Gmail: {e}")
 
 # =====================================
 # Classe SSH Server (Honeypot)
@@ -401,6 +417,7 @@ class HoneyPotServer(paramiko.ServerInterface):
             """, (timestamp, self.client_ip, username, password, success, redirected_flag))
             conn.commit()
             self.session_id = cur.lastrowid
+            # Détection brute-force
             cur.execute("SELECT COUNT(*) FROM login_attempts WHERE ip = ?", (self.client_ip,))
             count = cur.fetchone()[0]
             if count >= BRUTE_FORCE_THRESHOLD:
@@ -464,6 +481,8 @@ def handle_connection(client_socket, client_addr):
             chan.close()
             transport.close()
             return
+
+        # Gestion de la redirection éventuelle
         if server.redirect and server.exec_command is None:
             try:
                 remote_channel = server.real_client.invoke_shell(width=80, height=24)
@@ -504,6 +523,7 @@ def handle_connection(client_socket, client_addr):
                 transport.close()
                 print(f"[-] Connexion {client_ip} terminée (session redirigée).")
                 return
+
         if server.redirect and server.exec_command is not None:
             try:
                 stdin_out, stdout_out, stderr_out = server.real_client.exec_command(server.exec_command, timeout=10)
@@ -536,6 +556,7 @@ def handle_connection(client_socket, client_addr):
             print(f"[-] Connexion {client_ip} terminée (commande exec redirigée).")
             return
 
+        # Mode honeypot interactif
         fs = {path: (value.copy() if isinstance(value, dict) else value)
               for path, value in BASE_FILE_SYSTEM.items()}
         if server.username and server.username != "root":
@@ -550,7 +571,7 @@ def handle_connection(client_socket, client_addr):
         session_user = server.username if server.username else ""
         history = load_history(session_user)
         current_dir = "/root" if session_user == "root" else f"/home/{session_user}"
-        
+
         running = True
         while running:
             full_prompt = f"{session_user}@debian:{current_dir}$ "
@@ -573,11 +594,11 @@ def handle_connection(client_socket, client_addr):
                     continue
                 if char in ("\r", "\n"):
                     break
-                if char == "\x03":
+                if char == "\x03":  # Ctrl+C
                     chan.send(b"^C\r\n")
                     current_input = ""
                     break
-                if char in ("\x7f", "\x08"):
+                if char in ("\x7f", "\x08"):  # Backspace
                     if len(current_input) > 0:
                         current_input = current_input[:-1]
                         chan.send(b'\x08 \x08')
