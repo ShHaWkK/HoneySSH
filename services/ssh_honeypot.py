@@ -4,6 +4,7 @@ import threading
 import paramiko
 import sqlite3
 import time
+import random
 from datetime import datetime
 import os
 import smtplib
@@ -41,23 +42,51 @@ tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      
 tcp        0      0 127.0.0.1:3306          0.0.0.0:*               LISTEN      212/mysqld
 udp        0      0 0.0.0.0:68              0.0.0.0:*                           500/dhclient"""
 
-FAKE_DF_OUTPUT = """Filesystem      Size  Used Avail Use% Mounted on
-/dev/sda1        50G   7.5G   40G  16% /
-tmpfs           100M     0  100M   0% /run/user/1000"""
+def get_dynamic_df():
+    # Renvoie une sortie dynamique pour df
+    sizes = {"sda1": "50G", "tmpfs": "100M"}
+    used = {"sda1": f"{random.randint(5,10)}G", "tmpfs": "0"}
+    avail = {"sda1": f"{random.randint(30,45)}G", "tmpfs": "100M"}
+    usep = {"sda1": f"{random.randint(10,20)}%", "tmpfs": "0%"}
+    return f"""Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda1        {sizes['sda1']}   {used['sda1']}   {avail['sda1']}  {usep['sda1']} /
+tmpfs           {sizes['tmpfs']}     {used['tmpfs']}  {avail['tmpfs']}   {usep['tmpfs']} /run/user/1000"""
+
+def get_dynamic_uptime():
+    # Génère dynamiquement une chaîne uptime
+    now = datetime.now().strftime("%H:%M:%S")
+    days = random.randint(3,10)
+    hours = random.randint(0,23)
+    minutes = random.randint(0,59)
+    users = random.randint(1,5)
+    la1 = f"{random.uniform(0.00, 1.00):.2f}"
+    la2 = f"{random.uniform(0.00, 1.00):.2f}"
+    la3 = f"{random.uniform(0.00, 1.00):.2f}"
+    return f"{now} up {days} days, {hours}:{minutes:02d}, {users} user{'s' if users > 1 else ''}, load average: {la1}, {la2}, {la3}"
 
 # ================================
-# Fake File System (leurres)
+# Fake File System (leurres) - Étoffé
 # ================================
 BASE_FILE_SYSTEM = {
-    "/": {"type": "dir", "contents": ["root", "home", "etc", "tmp"]},
+    "/": {"type": "dir", "contents": ["bin", "sbin", "usr", "var", "opt", "root", "home", "etc", "tmp"]},
+    "/bin": {"type": "dir", "contents": ["bash", "ls", "cat", "grep"]},
+    "/sbin": {"type": "dir", "contents": ["init", "sshd"]},
+    "/usr": {"type": "dir", "contents": ["bin", "lib", "share"]},
+    "/usr/bin": {"type": "dir", "contents": ["python", "gcc", "make", "apt-get"]},
+    "/usr/sbin": {"type": "dir", "contents": ["apache2", "postfix"]},
+    "/var": {"type": "dir", "contents": ["log", "mail", "www"]},
+    "/var/log": {"type": "dir", "contents": ["syslog", "auth.log"]},
+    "/var/www": {"type": "dir", "contents": ["index.html"]},
+    "/opt": {"type": "dir", "contents": []},
     "/root": {"type": "dir", "contents": ["credentials.txt", "config_backup.zip", "ssh_keys.tar.gz"]},
     "/root/credentials.txt": {"type": "file", "content": "username=admin\npassword=admin123\napi_key=ABCD-1234-EFGH-5678"},
     "/root/config_backup.zip": {"type": "file", "content": "PK\x03\x04...<binary zip content>..."},
     "/root/ssh_keys.tar.gz": {"type": "file", "content": "...\x1F\x8B\x08...<binary tar.gz content>..."},
     "/home": {"type": "dir", "contents": []},
-    "/etc": {"type": "dir", "contents": ["passwd", "shadow", "apt", "service"]},
+    "/etc": {"type": "dir", "contents": ["passwd", "shadow", "apt", "service", "hosts"]},
     "/etc/passwd": {"type": "file", "content": "root:x:0:0:root:/root:/bin/bash\nuser:x:1000:1000::/home/user:/bin/bash"},
     "/etc/shadow": {"type": "file", "content": "root:*:18967:0:99999:7:::\nuser:*:18967:0:99999:7:::"},
+    "/etc/hosts": {"type": "file", "content": "127.0.0.1 localhost\n192.168.1.100 honeypot.local"},
     "/tmp": {"type": "dir", "contents": []}
 }
 
@@ -82,13 +111,14 @@ def save_history(username, history):
 # =====================================
 def get_completions(current_input, current_dir, username, fs):
     base_cmds = ["ls", "cd", "pwd", "whoami", "id", "uname", "echo", "cat", "rm",
-                 "ps", "netstat", "uptime", "df", "exit", "logout", "find", "grep", "head", "tail", "history"]
+                 "ps", "netstat", "uptime", "df", "exit", "logout", "find", "grep",
+                 "head", "tail", "history", "sudo", "su", "apt-get", "dpkg", "make"]
     if " " not in current_input:
-        return [cmd for cmd in base_cmds if cmd.startswith(current_input)]
+        return sorted([cmd for cmd in base_cmds if cmd.startswith(current_input)])
     else:
         parts = current_input.split(" ", 1)
         partial = parts[1]
-        return [path for path in fs.keys() if path.startswith(partial)]
+        return sorted([path for path in fs.keys() if path.startswith(partial)])
 
 def autocomplete(current_input, current_dir, username, fs):
     completions = get_completions(current_input, current_dir, username, fs)
@@ -106,7 +136,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
     output = ""
     new_dir = current_dir
     cmd = cmd.strip()
-    if cmd == "":
+    if not cmd:
         return "", new_dir
     parts = cmd.split(maxsplit=1)
     cmd_name = parts[0]
@@ -117,9 +147,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             full = (current_dir.rstrip("/") + "/" + path) if current_dir != "/" else "/" + path
         else:
             full = path
-        if len(full) > 1 and full.endswith("/"):
-            full = full.rstrip("/")
-        return full
+        return full.rstrip("/") if len(full) > 1 and full.endswith("/") else full
 
     if cmd_name == "cd":
         target = arg_str if arg_str else "~"
@@ -141,7 +169,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 output = "ls: cannot open directory '/root': Permission denied"
             elif target_path not in fs or fs[target_path]["type"] != "dir":
                 output = f"ls: cannot access '{arg_str}': No such file or directory"
-        if output == "":
+        if not output:
             contents = fs[target_path]["contents"] if target_path in fs and fs[target_path]["type"] == "dir" else []
             output = "\r\n".join(contents)
     elif cmd_name == "pwd":
@@ -149,16 +177,13 @@ def process_command(cmd, current_dir, username, fs, client_ip):
     elif cmd_name == "whoami":
         output = username
     elif cmd_name == "id":
-        if username == "root":
-            output = "uid=0(root) gid=0(root) groups=0(root)"
-        else:
-            output = f"uid=1000({username}) gid=1000({username}) groups=1000({username}),27(sudo)"
+        output = "uid=0(root) gid=0(root) groups=0(root)" if username == "root" else f"uid=1000({username}) gid=1000({username}) groups=1000({username}),27(sudo)"
     elif cmd_name == "uname":
         output = "Linux debian 4.19.0-18-amd64 #1 SMP Debian 4.19.208-1 (Debian)" if arg_str else "Linux"
     elif cmd_name == "echo":
         output = arg_str
     elif cmd_name == "cat":
-        if arg_str == "":
+        if not arg_str:
             output = ""
         else:
             file_path = resolve_path(arg_str)
@@ -166,23 +191,18 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 output = f"cat: {arg_str}: Permission denied"
             elif file_path in fs:
                 node = fs[file_path]
-                if node["type"] == "file":
-                    output = node["content"]
-                else:
-                    output = f"cat: {arg_str}: Is a directory"
+                output = node["content"] if node["type"] == "file" else f"cat: {arg_str}: Is a directory"
             else:
                 output = f"cat: {arg_str}: No such file or directory"
     elif cmd_name == "rm":
-        if arg_str == "":
+        if not arg_str:
             output = "rm: missing operand"
         else:
             target_path = resolve_path(arg_str)
             if target_path in fs:
                 node = fs[target_path]
                 if node["type"] == "file":
-                    parent_dir = target_path.rsplit("/", 1)[0]
-                    if parent_dir == "":
-                        parent_dir = "/"
+                    parent_dir = target_path.rsplit("/", 1)[0] or "/"
                     if parent_dir == "/root" and username != "root":
                         output = f"rm: cannot remove '{arg_str}': Permission denied"
                     else:
@@ -193,7 +213,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                             except ValueError:
                                 pass
                         output = ""
-                elif node["type"] == "dir":
+                else:
                     output = f"rm: cannot remove '{arg_str}': Is a directory"
             else:
                 output = f"rm: cannot remove '{arg_str}': No such file or directory"
@@ -202,10 +222,9 @@ def process_command(cmd, current_dir, username, fs, client_ip):
     elif cmd_name == "netstat":
         output = FAKE_NETSTAT_OUTPUT
     elif cmd_name == "uptime":
-        now = datetime.now().strftime("%H:%M:%S")
-        output = f"{now} up 5 days, 4:21, 2 users, load average: 0.00, 0.01, 0.05"
+        output = get_dynamic_uptime()
     elif cmd_name == "df":
-        output = FAKE_DF_OUTPUT
+        output = get_dynamic_df()
     elif cmd_name == "find":
         args = arg_str.split()
         if not args:
@@ -231,7 +250,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 output = f"grep: {filename}: No such file or directory"
     elif cmd_name == "head":
         args = arg_str.split()
-        if len(args) == 0:
+        if not args:
             output = "head: missing operand"
         else:
             filename = args[-1]
@@ -243,7 +262,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 output = f"head: cannot open '{filename}' for reading: No such file or directory"
     elif cmd_name == "tail":
         args = arg_str.split()
-        if len(args) == 0:
+        if not args:
             output = "tail: missing operand"
         else:
             filename = args[-1]
@@ -255,6 +274,29 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 output = f"tail: cannot open '{filename}' for reading: No such file or directory"
     elif cmd_name == "history":
         output = "\r\n".join(load_history(username))
+    # Simulation de sudo et su avec prompt de mot de passe
+    elif cmd_name == "sudo":
+        if username == "root":
+            if arg_str:
+                return process_command(arg_str, current_dir, username, fs, client_ip)
+            else:
+                output = ""
+        else:
+            # Simuler trois tentatives infructueuses
+            output = f"[sudo] password for {username}: \nSorry, try again.\nSorry, try again.\nSorry, try again.\nsudo: 3 incorrect password attempts\n"
+    elif cmd_name in ["su", "su-"]:
+        if username == "root":
+            output = ""
+        else:
+            output = "Password: \nsu: Authentication failure\n"
+    # Simulation d'apt-get, dpkg, make
+    elif cmd_name == "apt-get":
+        output = "E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)"
+    elif cmd_name == "dpkg":
+        output = "dpkg: error: must be root to perform this command"
+    elif cmd_name == "make":
+        output = "make: Nothing to be done for 'all'."
+    # Simulation de téléchargement avec wget, curl
     elif cmd_name in ["wget", "curl"]:
         if "http" in arg_str:
             with open("downloads.log", "a") as f:
@@ -315,9 +357,8 @@ def init_database():
 # =====================================
 def trigger_alert(session_id, command, client_ip, username):
     """
-    Envoie une alerte par email via le SMTP Gmail (port 587, TLS).
-    Assurez-vous d'utiliser un mot de passe d'application ou 
-    un compte autorisant 'less secure apps' sur Gmail.
+    Envoie une alerte par email via SMTP Gmail (port 587, TLS).
+    Utilisez un mot de passe d'application pour Gmail.
     """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
@@ -332,19 +373,17 @@ def trigger_alert(session_id, command, client_ip, username):
     except Exception as e:
         print(f"[!] Erreur lors de l'enregistrement de l'alerte en DB: {e}")
 
-    # Prépare le message
     subject = f"[HONEYPOT] Alerte commande suspecte de {client_ip}"
     body = f"Utilisateur: {username}\nCommande: {command}\nHeure: {timestamp}"
     msg = MIMEText(body)
-    msg["From"] = "alerte-honeypot@example.com"  # peut être la même que SMTP_USER
+    msg["From"] = "alerte-honeypot@example.com"  # Peut être identique à SMTP_USER
     msg["To"] = "admin@example.com"
     msg["Subject"] = subject
 
-    # Configuration SMTP Gmail
     SMTP_HOST = "smtp.gmail.com"
     SMTP_PORT = 587
-    SMTP_USER = "honeycute896@gmail.com"   # Remplacez par votre email Gmail
-    SMTP_PASS = "mgps uhqr ujux pbbf"       # Mot de passe d'application (ou votre pass si 'less secure apps')
+    SMTP_USER = "honeycute896@gmail.com"   # Remplacez par votre adresse Gmail
+    SMTP_PASS = "mgps uhqr ujux pbbf"       # Votre mot de passe d'application
 
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
@@ -482,7 +521,7 @@ def handle_connection(client_socket, client_addr):
             transport.close()
             return
 
-        # Gestion de la redirection éventuelle
+        # Gestion de la redirection éventuelle (si activée)
         if server.redirect and server.exec_command is None:
             try:
                 remote_channel = server.real_client.invoke_shell(width=80, height=24)
@@ -567,6 +606,7 @@ def handle_connection(client_socket, client_addr):
             fs[f"{user_home}/config_backup.zip"] = {"type": "file", "content": fs["/root/config_backup.zip"]["content"]}
             fs[f"{user_home}/ssh_keys.tar.gz"] = {"type": "file", "content": fs["/root/ssh_keys.tar.gz"]["content"]}
 
+        # Envoi de la bannière d'accueil
         chan.send(b"Welcome to Debian GNU/Linux 10 (buster)\r\n\r\n")
         session_user = server.username if server.username else ""
         history = load_history(session_user)
@@ -579,6 +619,7 @@ def handle_connection(client_socket, client_addr):
             current_input = ""
             last_was_tab = False
 
+            # Lecture interactive des caractères
             while True:
                 try:
                     byte = chan.recv(1)
@@ -592,18 +633,22 @@ def handle_connection(client_socket, client_addr):
                     char = byte.decode("utf-8", errors="ignore")
                 except Exception:
                     continue
+                # Détection de retour chariot
                 if char in ("\r", "\n"):
                     break
-                if char == "\x03":  # Ctrl+C
+                # Gestion de Ctrl+C
+                if char == "\x03":
                     chan.send(b"^C\r\n")
                     current_input = ""
                     break
-                if char in ("\x7f", "\x08"):  # Backspace
-                    if len(current_input) > 0:
+                # Gestion du backspace
+                if char in ("\x7f", "\x08"):
+                    if current_input:
                         current_input = current_input[:-1]
                         chan.send(b'\x08 \x08')
                     last_was_tab = False
                     continue
+                # Gestion de la touche Tab : autocomplétion avancée
                 if char == "\t":
                     if last_was_tab:
                         completions = get_completions(current_input, current_dir, session_user, fs)
@@ -628,8 +673,9 @@ def handle_connection(client_socket, client_addr):
 
             chan.send(b"\r\n")
             command = current_input.strip()
-            if command == "":
+            if not command:
                 continue
+            # Journalisation détaillée des commandes
             with open("commands.log", "a") as f:
                 f.write(f"{datetime.now()} - {client_ip} - {session_user}: {command}\n")
             history.append(command)
@@ -648,7 +694,9 @@ def handle_connection(client_socket, client_addr):
             except Exception as e:
                 print(f"[!] Erreur enregistrement commande DB: {e}")
 
-            suspicious_keywords = ["wget", "curl", "ftp", "scp", "tftp", "chmod +x", "bash -c", "sh -c", "python -c", "netcat", "nc "]
+            # Déclenchement d'alertes pour commandes suspectes
+            suspicious_keywords = ["wget", "curl", "ftp", "scp", "tftp", "chmod +x", "bash -c",
+                                   "sh -c", "python -c", "netcat", "nc ", "sudo", "su"]
             if any(kw in command.lower() for kw in suspicious_keywords):
                 trigger_alert(server.session_id, command, client_ip, session_user)
 
@@ -667,6 +715,8 @@ def handle_connection(client_socket, client_addr):
             if output:
                 if not output.endswith("\r\n"):
                     output += "\r\n"
+                # Simulation d'un délai de traitement pour plus de réalisme
+                time.sleep(random.uniform(0.05, 0.2))
                 chan.send(output.encode())
         chan.send(b"logout\r\n")
     except Exception as ex:
