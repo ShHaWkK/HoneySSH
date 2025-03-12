@@ -140,6 +140,47 @@ def autocomplete(current_input, current_dir, username, fs):
             return current_input.split(" ", 1)[0] + " " + completions[0]
     return current_input
 
+
+# ==============================================
+# Fonction Trigger_Alert
+# ==============================================
+def trigger_alert(session_id, command, client_ip, username):
+    """
+    Envoie une alerte par email via SMTP Gmail (port 587, TLS).
+    Enregistre également un événement "Suspicious" dans la table events.
+    """
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+        # Enregistrement de l'événement dans la table events
+        cur.execute("""
+            INSERT INTO events(timestamp, ip, username, event_type, details)
+            VALUES (?, ?, ?, ?, ?)
+        """, (timestamp, client_ip, username, "Suspicious", f"Commande exécutée: {command}"))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[!] Erreur lors de l'enregistrement de l'alerte en DB: {e}")
+
+    # Préparation du mail
+    subject = f"[HONEYPOT] Alerte commande suspecte de {client_ip}"
+    body = f"Utilisateur: {username}\nCommande: {command}\nHeure: {timestamp}"
+    msg = MIMEText(body)
+    msg["From"] = SMTP_USER
+    msg["To"] = ALERT_TO
+    msg["Subject"] = subject
+
+    # Envoi du mail via Gmail
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
+            smtp.starttls()
+            smtp.login(SMTP_USER, SMTP_PASS)
+            smtp.send_message(msg)
+    except Exception as e:
+        print(f"[!] Erreur lors de l'envoi du mail d'alerte via Gmail: {e}")
+
+
 # ==============================================
 # Simulation des commandes système avancées
 # ==============================================
