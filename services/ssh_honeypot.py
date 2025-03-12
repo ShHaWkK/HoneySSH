@@ -36,6 +36,45 @@ SMTP_PASS = "mgps uhqr ujux pbbf"        # Mot de passe d'application
 ALERT_FROM = SMTP_USER
 ALERT_TO = "admin@example.com"           # Adresse destinataire
 
+# ================================
+# Comptes utilisateurs préconfigurés
+# ================================
+PREDEFINED_USERS = {
+    "admin": {
+        "home": "/home/admin",
+        "files": {
+            "admin_credentials.txt": "admin:supersecret\nImportant credentials for admin account",
+            "admin_sshkey": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC...admin_key",
+            "projectA_config": "projectA: configuration data..."
+        }
+    },
+    "devops": {
+        "home": "/home/devops",
+        "files": {
+            "deploy_key": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQD...devops_key",
+            "jenkins_config.xml": "<jenkins><config>DevOps settings</config></jenkins>"
+        }
+    },
+    "dbadmin": {
+        "home": "/home/dbadmin",
+        "files": {
+            "db_backup.sql": "-- Fake SQL dump\nDROP TABLE IF EXISTS test;",
+            "db_scripts.sh": "#!/bin/bash\necho 'Running DB maintenance...'"
+        }
+    }
+}
+
+def populate_predefined_users(fs):
+    if "/home" not in fs:
+        fs["/home"] = {"type": "dir", "contents": []}
+    for user, info in PREDEFINED_USERS.items():
+        home_dir = info["home"]
+        fs[home_dir] = {"type": "dir", "contents": list(info["files"].keys())}
+        if user not in fs["/home"]["contents"]:
+            fs["/home"]["contents"].append(user)
+        for filename, content in info["files"].items():
+            fs[f"{home_dir}/{filename}"] = {"type": "file", "content": content}
+    return fs
 
 
 def trigger_alert(session_id, command, client_ip, username):
@@ -141,6 +180,8 @@ BASE_FILE_SYSTEM = {
     "/etc/hosts": {"type": "file", "content": "127.0.0.1 localhost\n192.168.1.100 honeypot.local"},
     "/tmp": {"type": "dir", "contents": []}
 }
+# Intégrer les comptes préconfigurés dans le système de fichiers
+BASE_FILE_SYSTEM = populate_predefined_users(BASE_FILE_SYSTEM)
 
 # ======================================
 # Fonctions pour historique persistant
@@ -205,7 +246,11 @@ def process_command(cmd, current_dir, username, fs, client_ip):
     if cmd_name == "cd":
         target = arg_str if arg_str else "~"
         if target in ["", "~"]:
-            new_dir = "/root" if username == "root" else f"/home/{username}"
+            # Pour les comptes préconfigurés, on utilise leur home dédié
+            if username in PREDEFINED_USERS:
+                new_dir = PREDEFINED_USERS[username]["home"]
+            else:
+                new_dir = "/root" if username == "root" else f"/home/{username}"
         else:
             target_path = resolve_path(target)
             if target_path == "/root" and username != "root":
@@ -359,11 +404,10 @@ def process_command(cmd, current_dir, username, fs, client_ip):
     # Simulation de téléchargement avec wget et curl (slow download simulation)
     elif cmd_name in ["wget", "curl"]:
         if "http" in arg_str:
-            # Simuler un téléchargement lent
             output = "Downloading large file... (simulation)\n"
             for i in range(1, 6):
                 output += f"Downloaded {i*20}%...\n"
-                time.sleep(0.5)  # Délai simulé
+                time.sleep(0.5)
             output += "Download complete.\n"
             with open("downloads.log", "a") as f:
                 f.write(f"{datetime.now()} - {username} from {client_ip} attempted download: {arg_str.split()[0]}\n")
@@ -373,13 +417,22 @@ def process_command(cmd, current_dir, username, fs, client_ip):
         output = f"bash: {cmd_name}: command not found"
     elif cmd_name in ["chmod", "bash", "sh", "netcat", "nc", "python"]:
         output = ""
+    # Simulation de commandes système multi-utilisateurs
     elif cmd_name in ["last", "who", "w"]:
         if cmd_name == "last":
-            output = "user1   pts/0        192.168.1.10    Wed May  3 10:01   still logged in\nuser2   pts/1        192.168.1.11    Wed May  3 09:55 - 10:15  (00:20)"
+            output = ("admin   pts/0        192.168.1.10    Wed May  3 10:01   still logged in\n"
+                      "devops  pts/1        192.168.1.11    Wed May  3 09:55 - 10:15  (00:20)\n"
+                      "dbadmin pts/2        192.168.1.12    Wed May  3 09:50 - 10:05  (00:15)")
         elif cmd_name == "who":
-            output = "user1    tty7         2023-05-03 10:00 (:0)\nuser2    pts/0        2023-05-03 09:55 (192.168.1.11)"
+            output = ("admin    tty7         2023-05-03 10:00 (:0)\n"
+                      "devops   pts/0        2023-05-03 09:55 (192.168.1.11)\n"
+                      "dbadmin  pts/1        2023-05-03 09:50 (192.168.1.12)")
         elif cmd_name == "w":
-            output = " 10:01:00 up 5 days,  2 users,  load average: 0.15, 0.10, 0.05\nUSER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT\nuser1    tty7     :0               10:00   1:00m  0.20s  0.20s /usr/bin/startx"
+            output = (" 10:01:00 up 5 days,  3 users,  load average: 0.15, 0.10, 0.05\n"
+                      "USER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT\n"
+                      "admin    tty7     :0               10:00   1:00m  0.20s  0.20s /usr/bin/startx\n"
+                      "devops   pts/0    192.168.1.11     09:55   5:00   0.10s  0.10s bash\n"
+                      "dbadmin  pts/1    192.168.1.12     09:50   3:00   0.15s  0.15s bash")
     elif cmd_name in ["exit", "logout"]:
         output = ""
     else:
@@ -387,9 +440,9 @@ def process_command(cmd, current_dir, username, fs, client_ip):
 
     return output, new_dir
 
-# =====================================
+# ======================================
 # Initialisation de la base SQLite
-# =====================================
+# ======================================
 def init_database():
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -427,9 +480,9 @@ def init_database():
     conn.commit()
     conn.close()
 
-# =====================================
+# ======================================
 # Fonction de génération hebdomadaire de rapport PDF
-# =====================================
+# ======================================
 def generate_weekly_report():
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -469,16 +522,16 @@ def weekly_report_thread():
         time.sleep(7 * 24 * 3600)
         generate_weekly_report()
 
-# =====================================
+# ======================================
 # Fonction de Keylogger SSH
-# =====================================
+# ======================================
 def log_keystroke(char):
     with open(KEYSTROKES_LOG, "a") as f:
         f.write(char)
 
-# =====================================
+# ======================================
 # Classe SSH Server (Honeypot)
-# =====================================
+# ======================================
 class HoneyPotServer(paramiko.ServerInterface):
     def __init__(self, client_ip):
         self.client_ip = client_ip
@@ -567,9 +620,9 @@ class HoneyPotServer(paramiko.ServerInterface):
         self.event.set()
         return True
 
-# =====================================
-# Gestion d'une connexion SSH (thread)
-# =====================================
+# ======================================
+# Boucle principale de gestion des connexions SSH
+# ======================================
 def handle_connection(client_socket, client_addr):
     """
     Gère une nouvelle connexion SSH avec :
@@ -611,46 +664,23 @@ def handle_connection(client_socket, client_addr):
             transport.close()
             return
 
-        # Si redirection est activée (non détaillé ici)
-        if server.redirect and server.exec_command is not None:
-            try:
-                stdin_out, stdout_out, stderr_out = server.real_client.exec_command(server.exec_command, timeout=10)
-            except Exception as e:
-                out_data = f"Remote execution error: {e}".encode()
-                exit_status = 1
-            else:
-                stdout_data = stdout_out.read()
-                stderr_data = stderr_out.read()
-                out_data = b""
-                if stdout_data:
-                    out_data += stdout_data
-                if stderr_data:
-                    if out_data:
-                        out_data += b"\r\n"
-                    out_data += stderr_data
-                exit_status = stdout_out.channel.recv_exit_status()
-            try:
-                if out_data:
-                    chan.send(out_data)
-                chan.send_exit_status(exit_status)
-            except Exception as e:
-                print(f"[!] Erreur lors de l'envoi du résultat exec à {client_ip}: {e}")
-            chan.close()
-            try:
-                server.real_client.close()
-            except Exception:
-                pass
-            transport.close()
-            print(f"[-] Connexion {client_ip} terminée (commande exec redirigée).")
-            return
-
         # Mode interactif honeypot
         fs = {path: (value.copy() if isinstance(value, dict) else value)
               for path, value in BASE_FILE_SYSTEM.items()}
-        if server.username and server.username != "root":
+        # Si l'utilisateur est préconfiguré, on utilise son home et ses fichiers
+        if server.username and server.username in PREDEFINED_USERS:
+            user_home = PREDEFINED_USERS[server.username]["home"]
+            fs[user_home] = {"type": "dir", "contents": list(PREDEFINED_USERS[server.username]["files"].keys())}
+            if server.username not in fs["/home"]["contents"]:
+                fs["/home"]["contents"].append(server.username)
+            for fname, fcontent in PREDEFINED_USERS[server.username]["files"].items():
+                fs[f"{user_home}/{fname}"] = {"type": "file", "content": fcontent}
+        # Sinon, pour un utilisateur inconnu (non-root), on simule un home générique
+        elif server.username and server.username != "root":
             user_home = f"/home/{server.username}"
             fs[user_home] = {"type": "dir", "contents": ["credentials.txt", "config_backup.zip", "ssh_keys.tar.gz"]}
-            fs["/home"]["contents"].append(server.username)
+            if server.username not in fs["/home"]["contents"]:
+                fs["/home"]["contents"].append(server.username)
             fs[f"{user_home}/credentials.txt"] = {"type": "file", "content": fs["/root/credentials.txt"]["content"]}
             fs[f"{user_home}/config_backup.zip"] = {"type": "file", "content": fs["/root/config_backup.zip"]["content"]}
             fs[f"{user_home}/ssh_keys.tar.gz"] = {"type": "file", "content": fs["/root/ssh_keys.tar.gz"]["content"]}
@@ -658,8 +688,7 @@ def handle_connection(client_socket, client_addr):
         chan.send(b"Welcome to Debian GNU/Linux 10 (buster)\r\n\r\n")
         session_user = server.username if server.username else ""
         history = load_history(session_user)
-        current_dir = "/root" if session_user == "root" else f"/home/{session_user}"
-
+        current_dir = "/root" if session_user == "root" else (PREDEFINED_USERS.get(session_user, {}).get("home", f"/home/{session_user}"))
         # Création d'un fichier de session pour relecture
         session_filename = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         session_log = open(session_filename, "w")
@@ -724,7 +753,7 @@ def handle_connection(client_socket, client_addr):
                             history_index = len(history)
                             chan.send(b"\r\033[K" + full_prompt.encode())
                             current_input = ""
-                    # Pour flèches gauche/droite, vous pouvez ajouter une gestion plus fine ici
+                    # Optionnel : gestion des flèches gauche/droite ici
                     last_was_tab = False
                     continue
                 if char == "\t":
@@ -809,350 +838,9 @@ def handle_connection(client_socket, client_addr):
             pass
         transport.close()
 
-# =====================================
+# ======================================
 # Thread de génération hebdomadaire de rapport PDF
-# =====================================
-def weekly_report_thread():
-    while True:
-        time.sleep(7 * 24 * 3600)  # Attendre 7 jours
-        generate_weekly_report()
-
-def generate_weekly_report():
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM events")
-    events = cur.fetchall()
-    conn.close()
-    
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, "Rapport Hebdomadaire du Honeypot SSH", ln=True, align="C")
-    pdf.ln(10)
-    pdf.set_font("Arial", size=10)
-    for event in events:
-        line = f"{event[1]} | {event[2]} | {event[3]} | {event[4]} | {event[5]}"
-        pdf.multi_cell(0, 5, line)
-    report_filename = f"weekly_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    pdf.output(report_filename)
-    
-    subject = "Rapport Hebdomadaire Honeypot SSH"
-    body = "Veuillez trouver en pièce jointe le rapport hebdomadaire des événements du Honeypot SSH."
-    msg = MIMEText(body)
-    msg["From"] = SMTP_USER
-    msg["To"] = ALERT_TO
-    msg["Subject"] = subject
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
-            smtp.starttls()
-            smtp.login(SMTP_USER, SMTP_PASS)
-            smtp.send_message(msg)
-            print("[*] Rapport hebdomadaire envoyé par email.")
-    except Exception as e:
-        print(f"[!] Erreur lors de l'envoi du rapport hebdomadaire: {e}")
-
-# =====================================
-# Fonction de Keylogger SSH
-# =====================================
-def log_keystroke(char):
-    with open(KEYSTROKES_LOG, "a") as f:
-        f.write(char)
-
-# =====================================
-# Classe SSH Server (Honeypot)
-# =====================================
-class HoneyPotServer(paramiko.ServerInterface):
-    def __init__(self, client_ip):
-        self.client_ip = client_ip
-        self.event = threading.Event()
-        self.username = None
-        self.password = None
-        self.session_id = None
-        self.redirect = False
-        self.real_client = None
-        self.exec_command = None
-        super().__init__()
-
-    def check_channel_request(self, kind, chanid):
-        if kind == "session":
-            return paramiko.OPEN_SUCCEEDED
-        return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
-
-    def get_allowed_auths(self, username):
-        return "publickey,password"
-
-    def check_auth_publickey(self, username, key):
-        try:
-            fingerprint = key.get_fingerprint().hex()
-        except Exception:
-            fingerprint = "unknown"
-        print(f"[!] Tentative d'auth SSH par clé publique de {self.client_ip} (user={username}, empreinte={fingerprint})")
-        return paramiko.AUTH_PARTIALLY_SUCCESSFUL
-
-    def check_auth_password(self, username, password):
-        self.username = username
-        self.password = password
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        success = 1
-        redirected_flag = 0
-        if ENABLE_REDIRECTION:
-            try:
-                real_client = paramiko.SSHClient()
-                real_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                real_client.connect(REAL_SSH_HOST, REAL_SSH_PORT, username=username, password=password, timeout=5)
-                self.redirect = True
-                self.real_client = real_client
-                redirected_flag = 1
-                print(f"[+] Identifiants valides pour le vrai serveur: {username}@{REAL_SSH_HOST}")
-            except Exception:
-                self.redirect = False
-                redirected_flag = 0
-                try:
-                    real_client.close()
-                except Exception:
-                    pass
-        try:
-            conn = sqlite3.connect(DB_NAME)
-            conn.execute("PRAGMA busy_timeout = 3000")
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO login_attempts(timestamp, ip, username, password, success, redirected)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (timestamp, self.client_ip, username, password, success, redirected_flag))
-            conn.commit()
-            self.session_id = cur.lastrowid
-            cur.execute("SELECT COUNT(*) FROM login_attempts WHERE ip = ?", (self.client_ip,))
-            count = cur.fetchone()[0]
-            if count >= BRUTE_FORCE_THRESHOLD:
-                with _brute_force_lock:
-                    if self.client_ip not in _brute_force_alerted:
-                        cur.execute("""
-                            INSERT INTO events(timestamp, ip, username, event_type, details)
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (timestamp, self.client_ip, username, "Brute-force", f"Tentatives multiples depuis {self.client_ip}"))
-                        conn.commit()
-                        _brute_force_alerted.add(self.client_ip)
-            conn.close()
-        except Exception as e:
-            print(f"[!] Erreur lors de l'enregistrement DB: {e}")
-        return paramiko.AUTH_SUCCESSFUL
-
-    def check_channel_shell_request(self, channel):
-        self.event.set()
-        return True
-
-    def check_channel_exec_request(self, channel, command):
-        try:
-            self.exec_command = command.decode('utf-8')
-        except Exception:
-            self.exec_command = str(command)
-        self.event.set()
-        return True
-
-# =====================================
-# Boucle principale de gestion des connexions SSH
-# =====================================
-def handle_connection(client_socket, client_addr):
-    client_ip = client_addr[0]
-    print(f"[+] Nouvelle connexion de {client_ip}")
-    try:
-        transport = paramiko.Transport(client_socket)
-    except Exception as e:
-        print(f"[!] Impossible d'initier le transport SSH pour {client_ip}: {e}")
-        client_socket.close()
-        return
-    try:
-        transport.local_version = SSH_BANNER
-        host_key = paramiko.RSAKey(filename="my_host_key")
-        transport.add_server_key(host_key)
-        server = HoneyPotServer(client_ip)
-        try:
-            transport.start_server(server=server)
-        except paramiko.SSHException as e:
-            print(f"[!] Négociation SSH échouée avec {client_ip}: {e}")
-            transport.close()
-            return
-        chan = transport.accept(20)
-        if chan is None:
-            print(f"[!] Aucun canal n'a été ouvert par {client_ip}")
-            transport.close()
-            return
-        chan.settimeout(None)
-        server.event.wait(10)
-        if not server.event.is_set():
-            print(f"[!] {client_ip} n'a pas demandé de shell/exec")
-            chan.close()
-            transport.close()
-            return
-
-        # Si redirection est activée, le traitement est effectué ici (non détaillé)
-
-        fs = {path: (value.copy() if isinstance(value, dict) else value)
-              for path, value in BASE_FILE_SYSTEM.items()}
-        if server.username and server.username != "root":
-            user_home = f"/home/{server.username}"
-            fs[user_home] = {"type": "dir", "contents": ["credentials.txt", "config_backup.zip", "ssh_keys.tar.gz"]}
-            fs["/home"]["contents"].append(server.username)
-            fs[f"{user_home}/credentials.txt"] = {"type": "file", "content": fs["/root/credentials.txt"]["content"]}
-            fs[f"{user_home}/config_backup.zip"] = {"type": "file", "content": fs["/root/config_backup.zip"]["content"]}
-            fs[f"{user_home}/ssh_keys.tar.gz"] = {"type": "file", "content": fs["/root/ssh_keys.tar.gz"]["content"]}
-
-        chan.send(b"Welcome to Debian GNU/Linux 10 (buster)\r\n\r\n")
-        session_user = server.username if server.username else ""
-        history = load_history(session_user)
-        current_dir = "/root" if session_user == "root" else f"/home/{session_user}"
-
-        # Création d'un fichier de session pour la relecture
-        session_filename = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        session_log = open(session_filename, "w")
-        history_index = len(history)
-
-        running = True
-        while running:
-            full_prompt = f"{session_user}@debian:{current_dir}$ "
-            chan.send(full_prompt.encode())
-            session_log.write(full_prompt + "\n")
-            current_input = ""
-            last_was_tab = False
-
-            while True:
-                try:
-                    byte = chan.recv(1)
-                except Exception:
-                    running = False
-                    break
-                if not byte:
-                    running = False
-                    break
-                try:
-                    char = byte.decode("utf-8", errors="ignore")
-                except Exception:
-                    continue
-
-                # Enregistrement (keylogger)
-                log_keystroke(char)
-                session_log.write(char)
-
-                if char in ("\r", "\n"):
-                    break
-                if char == "\x03":
-                    chan.send(b"^C\r\n")
-                    current_input = ""
-                    session_log.write("\n")
-                    break
-                if char in ("\x7f", "\x08"):
-                    if current_input:
-                        current_input = current_input[:-1]
-                        chan.send(b'\x08 \x08')
-                    last_was_tab = False
-                    continue
-                if char == "\x1b":
-                    seq = chan.recv(2)
-                    if seq == b"[A":  # Flèche haut
-                        if history_index > 0:
-                            history_index -= 1
-                            chan.send(b"\r\033[K")
-                            wanted_cmd = history[history_index]
-                            chan.send(full_prompt.encode() + wanted_cmd.encode())
-                            current_input = wanted_cmd
-                    elif seq == b"[B":  # Flèche bas
-                        if history_index < len(history) - 1:
-                            history_index += 1
-                            chan.send(b"\r\033[K")
-                            wanted_cmd = history[history_index]
-                            chan.send(full_prompt.encode() + wanted_cmd.encode())
-                            current_input = wanted_cmd
-                        else:
-                            history_index = len(history)
-                            chan.send(b"\r\033[K" + full_prompt.encode())
-                            current_input = ""
-                    # Pour flèches gauche/droite, une gestion plus fine peut être ajoutée ici
-                    last_was_tab = False
-                    continue
-                if char == "\t":
-                    if last_was_tab:
-                        completions = get_completions(current_input, current_dir, session_user, fs)
-                        if completions:
-                            chan.send(b"\r\n" + "\r\n".join(completions).encode() + b"\r\n")
-                            chan.send(full_prompt.encode() + current_input.encode())
-                        last_was_tab = False
-                        continue
-                    else:
-                        suggestion = autocomplete(current_input, current_dir, session_user, fs)
-                        if suggestion and suggestion != current_input:
-                            to_add = suggestion[len(current_input):]
-                            chan.send(to_add.encode())
-                            current_input = suggestion
-                        else:
-                            chan.send(b"\x07")
-                        last_was_tab = True
-                        continue
-                chan.send(char.encode())
-                current_input += char
-                last_was_tab = False
-
-            chan.send(b"\r\n")
-            command = current_input.strip()
-            session_log.write("\n")
-            if not command:
-                continue
-
-            with open("commands.log", "a") as f:
-                f.write(f"{datetime.now()} - {client_ip} - {session_user}: {command}\n")
-            history.append(command)
-            save_history(session_user, history)
-            history_index = len(history)
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            try:
-                conn = sqlite3.connect(DB_NAME)
-                conn.execute("PRAGMA busy_timeout = 3000")
-                cur = conn.cursor()
-                cur.execute("""
-                    INSERT INTO commands(timestamp, ip, username, command, session_id)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (ts, client_ip, session_user, command, server.session_id))
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                print(f"[!] Erreur enregistrement commande DB: {e}")
-
-            suspicious_keywords = ["wget", "curl", "ftp", "scp", "sftp", "tftp", "chmod +x",
-                                   "bash -c", "sh -c", "python -c", "netcat", "nc ", "sudo", "su"]
-            if any(kw in command.lower() for kw in suspicious_keywords):
-                trigger_alert(server.session_id, command, client_ip, session_user)
-
-            if command in ["exit", "logout"]:
-                print(f"[-] {client_ip} a fermé la session via '{command}'")
-                running = False
-                break
-
-            time.sleep(0.1)
-            try:
-                output, new_dir = process_command(command, current_dir, session_user, fs, client_ip)
-            except Exception as e:
-                output = f"Error executing command: {e}"
-                new_dir = current_dir
-            current_dir = new_dir
-            if output:
-                if not output.endswith("\r\n"):
-                    output += "\r\n"
-                time.sleep(random.uniform(0.05, 0.2))
-                chan.send(output.encode())
-                session_log.write(output)
-        chan.send(b"logout\r\n")
-        session_log.close()
-    except Exception as ex:
-        print(f"[!] Exception dans handle_connection pour {client_ip}: {ex}")
-    finally:
-        try:
-            chan.close()
-        except Exception:
-            pass
-        transport.close()
-
-# =====================================
-# Thread de génération hebdomadaire de rapport PDF
-# =====================================
+# ======================================
 def weekly_report_thread():
     while True:
         time.sleep(7 * 24 * 3600)
@@ -1192,16 +880,16 @@ def generate_weekly_report():
     except Exception as e:
         print(f"[!] Erreur lors de l'envoi du rapport hebdomadaire: {e}")
 
-# =====================================
+# ======================================
 # Fonction de Keylogger SSH
-# =====================================
+# ======================================
 def log_keystroke(char):
     with open(KEYSTROKES_LOG, "a") as f:
         f.write(char)
 
-# =====================================
-# Classe SSH Server (Honeypot)
-# =====================================
+# ======================================
+# Classe SSH Server (Honeypot) – version unique
+# ======================================
 class HoneyPotServer(paramiko.ServerInterface):
     def __init__(self, client_ip):
         self.client_ip = client_ip
@@ -1290,9 +978,9 @@ class HoneyPotServer(paramiko.ServerInterface):
         self.event.set()
         return True
 
-# =====================================
-# Boucle principale du serveur honeypot SSH
-# =====================================
+# ======================================
+# Boucle principale de gestion des connexions SSH
+# ======================================
 if __name__ == "__main__":
     init_database()
     # Démarrage du thread de rapport hebdomadaire
