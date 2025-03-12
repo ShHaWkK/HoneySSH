@@ -4,3 +4,4 @@ paramiko
 requests
 python-dotenv
 loguru
+fpdf
