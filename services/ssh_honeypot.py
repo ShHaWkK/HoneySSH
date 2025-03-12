@@ -9,12 +9,13 @@ from datetime import datetime
 import os
 import smtplib
 from email.mime.text import MIMEText
+from fpdf import FPDF  # Pour la génération PDF
 
 # =======================
 # Configuration Variables
 # =======================
 HOST = ""  # écoute sur toutes interfaces
-PORT = 2222
+PORT = 2224
 SSH_BANNER = "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.1"
 ENABLE_REDIRECTION = False
 REAL_SSH_HOST = "192.168.1.100"
@@ -23,9 +24,19 @@ REAL_SSH_PORT = 22
 DB_NAME = "honeypot_data.db"
 BRUTE_FORCE_THRESHOLD = 5
 
-# Pour éviter de générer plusieurs alertes brute-force par IP
-_brute_force_alerted = set()
-_brute_force_lock = threading.Lock()
+# SMTP configuration (Gmail)
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 587
+SMTP_USER = "honeycute896@gmail.com"    # Remplacez par votre adresse Gmail
+SMTP_PASS = "mgps uhqr ujux pbbf"        # Mot de passe d'application
+
+# Adresses mail pour alertes
+ALERT_FROM = SMTP_USER
+ALERT_TO = "admin@example.com"
+
+# Fichiers de logs pour keylogger et transferts
+KEYSTROKES_LOG = "keystrokes.log"
+FILE_TRANSFER_LOG = "file_transfers.log"
 
 # ================================
 # Simulated outputs for system commands
@@ -43,7 +54,6 @@ tcp        0      0 127.0.0.1:3306          0.0.0.0:*               LISTEN      
 udp        0      0 0.0.0.0:68              0.0.0.0:*                           500/dhclient"""
 
 def get_dynamic_df():
-    # Renvoie une sortie dynamique pour df
     sizes = {"sda1": "50G", "tmpfs": "100M"}
     used = {"sda1": f"{random.randint(5,10)}G", "tmpfs": "0"}
     avail = {"sda1": f"{random.randint(30,45)}G", "tmpfs": "100M"}
@@ -53,7 +63,6 @@ def get_dynamic_df():
 tmpfs           {sizes['tmpfs']}     {used['tmpfs']}  {avail['tmpfs']}   {usep['tmpfs']} /run/user/1000"""
 
 def get_dynamic_uptime():
-    # Génère dynamiquement une chaîne uptime
     now = datetime.now().strftime("%H:%M:%S")
     days = random.randint(3,10)
     hours = random.randint(0,23)
@@ -78,10 +87,11 @@ BASE_FILE_SYSTEM = {
     "/var/log": {"type": "dir", "contents": ["syslog", "auth.log"]},
     "/var/www": {"type": "dir", "contents": ["index.html"]},
     "/opt": {"type": "dir", "contents": []},
-    "/root": {"type": "dir", "contents": ["credentials.txt", "config_backup.zip", "ssh_keys.tar.gz"]},
+    "/root": {"type": "dir", "contents": ["credentials.txt", "config_backup.zip", "ssh_keys.tar.gz", "rootkit_detector.sh"]},
     "/root/credentials.txt": {"type": "file", "content": "username=admin\npassword=admin123\napi_key=ABCD-1234-EFGH-5678"},
     "/root/config_backup.zip": {"type": "file", "content": "PK\x03\x04...<binary zip content>..."},
     "/root/ssh_keys.tar.gz": {"type": "file", "content": "...\x1F\x8B\x08...<binary tar.gz content>..."},
+    "/root/rootkit_detector.sh": {"type": "file", "content": "#!/bin/bash\necho 'Rootkit detector active'"},
     "/home": {"type": "dir", "contents": []},
     "/etc": {"type": "dir", "contents": ["passwd", "shadow", "apt", "service", "hosts"]},
     "/etc/passwd": {"type": "file", "content": "root:x:0:0:root:/root:/bin/bash\nuser:x:1000:1000::/home/user:/bin/bash"},
@@ -112,7 +122,8 @@ def save_history(username, history):
 def get_completions(current_input, current_dir, username, fs):
     base_cmds = ["ls", "cd", "pwd", "whoami", "id", "uname", "echo", "cat", "rm",
                  "ps", "netstat", "uptime", "df", "exit", "logout", "find", "grep",
-                 "head", "tail", "history", "sudo", "su", "apt-get", "dpkg", "make"]
+                 "head", "tail", "history", "sudo", "su", "apt-get", "dpkg", "make",
+                 "last", "who", "w", "scp", "sftp"]
     if " " not in current_input:
         return sorted([cmd for cmd in base_cmds if cmd.startswith(current_input)])
     else:
@@ -149,6 +160,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             full = path
         return full.rstrip("/") if len(full) > 1 and full.endswith("/") else full
 
+    # Commandes basiques et de navigation
     if cmd_name == "cd":
         target = arg_str if arg_str else "~"
         if target in ["", "~"]:
@@ -199,7 +211,11 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             output = "rm: missing operand"
         else:
             target_path = resolve_path(arg_str)
-            if target_path in fs:
+            # Détection d'attaques sur fichiers critiques
+            if target_path in ["/etc/passwd", "/etc/shadow", "/root/.ssh/authorized_keys", "/root/rootkit_detector.sh"]:
+                output = f"rm: cannot remove '{arg_str}': Permission denied (critical file)"
+                trigger_alert(-1, f"Tentative de suppression de {target_path}", client_ip, username)
+            elif target_path in fs:
                 node = fs[target_path]
                 if node["type"] == "file":
                     parent_dir = target_path.rsplit("/", 1)[0] or "/"
@@ -225,6 +241,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
         output = get_dynamic_uptime()
     elif cmd_name == "df":
         output = get_dynamic_df()
+    # Commandes avancées
     elif cmd_name == "find":
         args = arg_str.split()
         if not args:
@@ -274,7 +291,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 output = f"tail: cannot open '{filename}' for reading: No such file or directory"
     elif cmd_name == "history":
         output = "\r\n".join(load_history(username))
-    # Simulation de sudo et su avec prompt de mot de passe
+    # Simulation de commandes de gestion de privilèges
     elif cmd_name == "sudo":
         if username == "root":
             if arg_str:
@@ -282,21 +299,26 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             else:
                 output = ""
         else:
-            # Simuler trois tentatives infructueuses
             output = f"[sudo] password for {username}: \nSorry, try again.\nSorry, try again.\nSorry, try again.\nsudo: 3 incorrect password attempts\n"
     elif cmd_name in ["su", "su-"]:
         if username == "root":
             output = ""
         else:
             output = "Password: \nsu: Authentication failure\n"
-    # Simulation d'apt-get, dpkg, make
+    # Simulation de commandes d'installation
     elif cmd_name == "apt-get":
         output = "E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)"
     elif cmd_name == "dpkg":
         output = "dpkg: error: must be root to perform this command"
     elif cmd_name == "make":
         output = "make: Nothing to be done for 'all'."
-    # Simulation de téléchargement avec wget, curl
+    # Simulation de commandes de transfert de fichiers
+    elif cmd_name in ["scp", "sftp"]:
+        # Capture de la tentative de transfert
+        with open(FILE_TRANSFER_LOG, "a") as f:
+            f.write(f"{datetime.now()} - {username} from {client_ip} attempted file transfer: {arg_str}\n")
+        output = f"bash: {cmd_name}: command not found"
+    # Simulation de téléchargement
     elif cmd_name in ["wget", "curl"]:
         if "http" in arg_str:
             with open("downloads.log", "a") as f:
@@ -306,6 +328,14 @@ def process_command(cmd, current_dir, username, fs, client_ip):
         output = f"bash: {cmd_name}: command not found"
     elif cmd_name in ["chmod", "bash", "sh", "netcat", "nc", "python"]:
         output = ""
+    elif cmd_name in ["last", "who", "w"]:
+        # Simulation de logs systèmes multi-utilisateurs
+        if cmd_name == "last":
+            output = "user1   pts/0        192.168.1.10    Wed May  3 10:01   still logged in\nuser2   pts/1        192.168.1.11    Wed May  3 09:55 - 10:15  (00:20)"
+        elif cmd_name == "who":
+            output = "user1    tty7         2023-05-03 10:00 (:0)\nuser2    pts/0        2023-05-03 09:55 (192.168.1.11)"
+        elif cmd_name == "w":
+            output = " 10:01:00 up 5 days,  2 users,  load average: 0.15, 0.10, 0.05\nUSER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT\nuser1    tty7     :0               10:00   1:00m  0.20s  0.20s /usr/bin/startx"
     elif cmd_name in ["exit", "logout"]:
         output = ""
     else:
@@ -353,45 +383,58 @@ def init_database():
     conn.close()
 
 # =====================================
-# Fonction de déclenchement d'alertes
+# Fonction de génération hebdomadaire de rapport PDF
 # =====================================
-def trigger_alert(session_id, command, client_ip, username):
-    """
-    Envoie une alerte par email via SMTP Gmail (port 587, TLS).
-    Utilisez un mot de passe d'application pour Gmail.
-    """
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO events(timestamp, ip, username, event_type, details)
-            VALUES (?, ?, ?, ?, ?)
-        """, (timestamp, client_ip, username, "Suspicious", f"Commande exécutée: {command}"))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"[!] Erreur lors de l'enregistrement de l'alerte en DB: {e}")
-
-    subject = f"[HONEYPOT] Alerte commande suspecte de {client_ip}"
-    body = f"Utilisateur: {username}\nCommande: {command}\nHeure: {timestamp}"
+def generate_weekly_report():
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM events")
+    events = cur.fetchall()
+    conn.close()
+    
+    # Création d'un PDF à l'aide de FPDF
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "Rapport Hebdomadaire du Honeypot SSH", ln=True, align="C")
+    pdf.ln(10)
+    pdf.set_font("Arial", size=10)
+    for event in events:
+        # Chaque événement est tuple: (id, timestamp, ip, username, event_type, details)
+        line = f"{event[1]} | {event[2]} | {event[3]} | {event[4]} | {event[5]}"
+        pdf.multi_cell(0, 5, line)
+    report_filename = f"weekly_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    pdf.output(report_filename)
+    
+    # Envoyer le rapport par mail
+    subject = "Rapport Hebdomadaire Honeypot SSH"
+    body = "Veuillez trouver en pièce jointe le rapport hebdomadaire des événements du Honeypot SSH."
     msg = MIMEText(body)
-    msg["From"] = "alerte-honeypot@example.com"  # Peut être identique à SMTP_USER
-    msg["To"] = "admin@example.com"
+    msg["From"] = SMTP_USER
+    msg["To"] = ALERT_TO
     msg["Subject"] = subject
-
-    SMTP_HOST = "smtp.gmail.com"
-    SMTP_PORT = 587
-    SMTP_USER = "honeycute896@gmail.com"   # Remplacez par votre adresse Gmail
-    SMTP_PASS = "mgps uhqr ujux pbbf"       # Votre mot de passe d'application
-
+    # Pour joindre le PDF, vous pouvez utiliser la classe MIMEBase. (Simplifié ici)
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
             smtp.starttls()
             smtp.login(SMTP_USER, SMTP_PASS)
             smtp.send_message(msg)
+            print("[*] Rapport hebdomadaire envoyé par email.")
     except Exception as e:
-        print(f"[!] Erreur lors de l'envoi du mail d'alerte via Gmail: {e}")
+        print(f"[!] Erreur lors de l'envoi du rapport hebdomadaire: {e}")
+
+def weekly_report_thread():
+    while True:
+        # Attendre 7 jours (7*24*3600 secondes)
+        time.sleep(7 * 24 * 3600)
+        generate_weekly_report()
+
+# =====================================
+# Fonction de Keylogger SSH
+# =====================================
+def log_keystroke(char):
+    with open(KEYSTROKES_LOG, "a") as f:
+        f.write(char)
 
 # =====================================
 # Classe SSH Server (Honeypot)
@@ -521,7 +564,7 @@ def handle_connection(client_socket, client_addr):
             transport.close()
             return
 
-        # Gestion de la redirection éventuelle (si activée)
+        # Redirection éventuelle (si activée)
         if server.redirect and server.exec_command is None:
             try:
                 remote_channel = server.real_client.invoke_shell(width=80, height=24)
@@ -606,20 +649,24 @@ def handle_connection(client_socket, client_addr):
             fs[f"{user_home}/config_backup.zip"] = {"type": "file", "content": fs["/root/config_backup.zip"]["content"]}
             fs[f"{user_home}/ssh_keys.tar.gz"] = {"type": "file", "content": fs["/root/ssh_keys.tar.gz"]["content"]}
 
-        # Envoi de la bannière d'accueil
         chan.send(b"Welcome to Debian GNU/Linux 10 (buster)\r\n\r\n")
         session_user = server.username if server.username else ""
         history = load_history(session_user)
         current_dir = "/root" if session_user == "root" else f"/home/{session_user}"
 
+        # Création d'un fichier de session pour la relecture
+        session_filename = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        session_log = open(session_filename, "w")
+
         running = True
         while running:
             full_prompt = f"{session_user}@debian:{current_dir}$ "
             chan.send(full_prompt.encode())
+            # Enregistrer le prompt dans la session
+            session_log.write(full_prompt + "\n")
             current_input = ""
             last_was_tab = False
 
-            # Lecture interactive des caractères
             while True:
                 try:
                     byte = chan.recv(1)
@@ -633,22 +680,22 @@ def handle_connection(client_socket, client_addr):
                     char = byte.decode("utf-8", errors="ignore")
                 except Exception:
                     continue
-                # Détection de retour chariot
+                # Enregistrer chaque frappe (keylogger)
+                log_keystroke(char)
+                session_log.write(char)
                 if char in ("\r", "\n"):
                     break
-                # Gestion de Ctrl+C
-                if char == "\x03":
+                if char == "\x03":  # Ctrl+C
                     chan.send(b"^C\r\n")
                     current_input = ""
+                    session_log.write("\n")
                     break
-                # Gestion du backspace
                 if char in ("\x7f", "\x08"):
                     if current_input:
                         current_input = current_input[:-1]
                         chan.send(b'\x08 \x08')
                     last_was_tab = False
                     continue
-                # Gestion de la touche Tab : autocomplétion avancée
                 if char == "\t":
                     if last_was_tab:
                         completions = get_completions(current_input, current_dir, session_user, fs)
@@ -673,9 +720,9 @@ def handle_connection(client_socket, client_addr):
 
             chan.send(b"\r\n")
             command = current_input.strip()
+            session_log.write("\n")
             if not command:
                 continue
-            # Journalisation détaillée des commandes
             with open("commands.log", "a") as f:
                 f.write(f"{datetime.now()} - {client_ip} - {session_user}: {command}\n")
             history.append(command)
@@ -694,8 +741,7 @@ def handle_connection(client_socket, client_addr):
             except Exception as e:
                 print(f"[!] Erreur enregistrement commande DB: {e}")
 
-            # Déclenchement d'alertes pour commandes suspectes
-            suspicious_keywords = ["wget", "curl", "ftp", "scp", "tftp", "chmod +x", "bash -c",
+            suspicious_keywords = ["wget", "curl", "ftp", "scp", "sftp", "tftp", "chmod +x", "bash -c",
                                    "sh -c", "python -c", "netcat", "nc ", "sudo", "su"]
             if any(kw in command.lower() for kw in suspicious_keywords):
                 trigger_alert(server.session_id, command, client_ip, session_user)
@@ -715,10 +761,11 @@ def handle_connection(client_socket, client_addr):
             if output:
                 if not output.endswith("\r\n"):
                     output += "\r\n"
-                # Simulation d'un délai de traitement pour plus de réalisme
                 time.sleep(random.uniform(0.05, 0.2))
                 chan.send(output.encode())
+                session_log.write(output)
         chan.send(b"logout\r\n")
+        session_log.close()
     except Exception as ex:
         print(f"[!] Exception dans handle_connection pour {client_ip}: {ex}")
     finally:
@@ -729,10 +776,66 @@ def handle_connection(client_socket, client_addr):
         transport.close()
 
 # =====================================
+# Fonction de Keylogger
+# =====================================
+def log_keystroke(char):
+    with open(KEYSTROKES_LOG, "a") as f:
+        f.write(char)
+
+# =====================================
+# Thread de génération hebdomadaire de rapport PDF
+# =====================================
+def weekly_report_thread():
+    while True:
+        # Attendre 7 jours
+        time.sleep(7 * 24 * 3600)
+        generate_weekly_report()
+
+def generate_weekly_report():
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM events")
+    events = cur.fetchall()
+    conn.close()
+    
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "Rapport Hebdomadaire du Honeypot SSH", ln=True, align="C")
+    pdf.ln(10)
+    pdf.set_font("Arial", size=10)
+    for event in events:
+        # event: (id, timestamp, ip, username, event_type, details)
+        line = f"{event[1]} | {event[2]} | {event[3]} | {event[4]} | {event[5]}"
+        pdf.multi_cell(0, 5, line)
+    report_filename = f"weekly_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    pdf.output(report_filename)
+    
+    # Envoyer le rapport par email
+    subject = "Rapport Hebdomadaire Honeypot SSH"
+    body = "Veuillez trouver en pièce jointe le rapport hebdomadaire des événements du Honeypot SSH."
+    msg = MIMEText(body)
+    msg["From"] = SMTP_USER
+    msg["To"] = ALERT_TO
+    msg["Subject"] = subject
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
+            smtp.starttls()
+            smtp.login(SMTP_USER, SMTP_PASS)
+            smtp.send_message(msg)
+            print("[*] Rapport hebdomadaire envoyé par email.")
+    except Exception as e:
+        print(f"[!] Erreur lors de l'envoi du rapport hebdomadaire: {e}")
+
+# =====================================
 # Boucle principale du serveur honeypot SSH
 # =====================================
 if __name__ == "__main__":
     init_database()
+    # Démarrer le thread du rapport hebdomadaire
+    report_thread = threading.Thread(target=weekly_report_thread, daemon=True)
+    report_thread.start()
+
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
