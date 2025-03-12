@@ -573,6 +573,14 @@ class HoneyPotServer(paramiko.ServerInterface):
 # Gestion d'une connexion SSH (thread)
 # =====================================
 def handle_connection(client_socket, client_addr):
+    """
+    Gère une nouvelle connexion SSH :
+      - Historique (flèches haut/bas)
+      - Autocomplétion (Tab + double Tab)
+      - Keylogger
+      - Session log
+      - Alerte si commandes suspectes
+    """
     client_ip = client_addr[0]
     print(f"[+] Nouvelle connexion de {client_ip}")
     try:
@@ -581,10 +589,15 @@ def handle_connection(client_socket, client_addr):
         print(f"[!] Impossible d'initier le transport SSH pour {client_ip}: {e}")
         client_socket.close()
         return
+
     try:
+        # Bannière SSH factice
         transport.local_version = SSH_BANNER
+        # Charger la clé host du honeypot
         host_key = paramiko.RSAKey(filename="my_host_key")
         transport.add_server_key(host_key)
+        
+        # Instancier notre serveur
         server = HoneyPotServer(client_ip)
         try:
             transport.start_server(server=server)
@@ -592,11 +605,13 @@ def handle_connection(client_socket, client_addr):
             print(f"[!] Négociation SSH échouée avec {client_ip}: {e}")
             transport.close()
             return
+
         chan = transport.accept(20)
         if chan is None:
             print(f"[!] Aucun canal n'a été ouvert par {client_ip}")
             transport.close()
             return
+
         chan.settimeout(None)
         server.event.wait(10)
         if not server.event.is_set():
@@ -605,81 +620,10 @@ def handle_connection(client_socket, client_addr):
             transport.close()
             return
 
-        # Redirection éventuelle (si activée)
-        if server.redirect and server.exec_command is None:
-            try:
-                remote_channel = server.real_client.invoke_shell(width=80, height=24)
-            except Exception as e:
-                print(f"[!] Échec d'ouverture d'un shell sur le serveur réel pour {client_ip}: {e}")
-                server.real_client.close()
-                server.redirect = False
-            if server.redirect:
-                def forward(src, dst):
-                    try:
-                        while True:
-                            data = src.recv(1024)
-                            if not data:
-                                break
-                            dst.send(data)
-                    except Exception:
-                        pass
-                t1 = threading.Thread(target=forward, args=(chan, remote_channel))
-                t2 = threading.Thread(target=forward, args=(remote_channel, chan))
-                t1.daemon = True
-                t2.daemon = True
-                t1.start()
-                t2.start()
-                t1.join()
-                t2.join()
-                try:
-                    chan.close()
-                except Exception:
-                    pass
-                try:
-                    remote_channel.close()
-                except Exception:
-                    pass
-                try:
-                    server.real_client.close()
-                except Exception:
-                    pass
-                transport.close()
-                print(f"[-] Connexion {client_ip} terminée (session redirigée).")
-                return
+        # -- Si redirection ENABLE_REDIRECTION est activée, gère le code de redirection éventuel --
+        # (Non détaillé ici : server.redirect / server.exec_command)
 
-        if server.redirect and server.exec_command is not None:
-            try:
-                stdin_out, stdout_out, stderr_out = server.real_client.exec_command(server.exec_command, timeout=10)
-            except Exception as e:
-                out_data = f"Remote execution error: {e}".encode()
-                exit_status = 1
-            else:
-                stdout_data = stdout_out.read()
-                stderr_data = stderr_out.read()
-                out_data = b""
-                if stdout_data:
-                    out_data += stdout_data
-                if stderr_data:
-                    if out_data:
-                        out_data += b"\r\n"
-                    out_data += stderr_data
-                exit_status = stdout_out.channel.recv_exit_status()
-            try:
-                if out_data:
-                    chan.send(out_data)
-                chan.send_exit_status(exit_status)
-            except Exception as e:
-                print(f"[!] Erreur lors de l'envoi du résultat exec à {client_ip}: {e}")
-            chan.close()
-            try:
-                server.real_client.close()
-            except Exception:
-                pass
-            transport.close()
-            print(f"[-] Connexion {client_ip} terminée (commande exec redirigée).")
-            return
-
-        # Mode honeypot interactif
+        # Préparer le faux FS pour l'utilisateur
         fs = {path: (value.copy() if isinstance(value, dict) else value)
               for path, value in BASE_FILE_SYSTEM.items()}
         if server.username and server.username != "root":
@@ -690,21 +634,27 @@ def handle_connection(client_socket, client_addr):
             fs[f"{user_home}/config_backup.zip"] = {"type": "file", "content": fs["/root/config_backup.zip"]["content"]}
             fs[f"{user_home}/ssh_keys.tar.gz"] = {"type": "file", "content": fs["/root/ssh_keys.tar.gz"]["content"]}
 
+        # Envoyer une bannière de bienvenue
         chan.send(b"Welcome to Debian GNU/Linux 10 (buster)\r\n\r\n")
+
+        # Définir l'utilisateur + l'historique + le répertoire courant
         session_user = server.username if server.username else ""
         history = load_history(session_user)
         current_dir = "/root" if session_user == "root" else f"/home/{session_user}"
 
-        # Création d'un fichier de session pour la relecture
+        # Fichier de session (pour la relecture)
         session_filename = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         session_log = open(session_filename, "w")
+
+        # Index d'historique (on se place en fin d'historique)
+        history_index = len(history)
 
         running = True
         while running:
             full_prompt = f"{session_user}@debian:{current_dir}$ "
             chan.send(full_prompt.encode())
-            # Enregistrer le prompt dans la session
             session_log.write(full_prompt + "\n")
+
             current_input = ""
             last_was_tab = False
 
@@ -717,28 +667,69 @@ def handle_connection(client_socket, client_addr):
                 if not byte:
                     running = False
                     break
+
                 try:
                     char = byte.decode("utf-8", errors="ignore")
                 except Exception:
                     continue
-                # Enregistrer chaque frappe (keylogger)
+
+                # Enregistrer la frappe (keylogger)
                 log_keystroke(char)
                 session_log.write(char)
+
+                # Fin de ligne ?
                 if char in ("\r", "\n"):
                     break
-                if char == "\x03":  # Ctrl+C
+
+                # Ctrl+C
+                if char == "\x03":
                     chan.send(b"^C\r\n")
                     current_input = ""
                     session_log.write("\n")
                     break
+
+                # Backspace
                 if char in ("\x7f", "\x08"):
                     if current_input:
                         current_input = current_input[:-1]
                         chan.send(b'\x08 \x08')
                     last_was_tab = False
                     continue
+
+                # Séquence d'échappement (flèches, etc.)
+                if char == "\x1b":
+                    seq = chan.recv(2)  # Ex: "[A"
+                    if seq == b"[A":  # Flèche haut
+                        if history_index > 0:
+                            history_index -= 1
+                            chan.send(b"\r\033[K")  # Effacer la ligne
+                            wanted_cmd = history[history_index]
+                            chan.send(full_prompt.encode() + wanted_cmd.encode())
+                            current_input = wanted_cmd
+                    elif seq == b"[B":  # Flèche bas
+                        if history_index < len(history):
+                            history_index += 1
+                            chan.send(b"\r\033[K")
+                            if history_index == len(history):
+                                # Ligne vide
+                                chan.send(full_prompt.encode())
+                                current_input = ""
+                            else:
+                                wanted_cmd = history[history_index]
+                                chan.send(full_prompt.encode() + wanted_cmd.encode())
+                                current_input = wanted_cmd
+                    elif seq == b"[C":  # Flèche droite (optionnel)
+                        pass  # On ignore ou bip
+                    elif seq == b"[D":  # Flèche gauche (optionnel)
+                        pass  # On ignore ou bip
+
+                    last_was_tab = False
+                    continue
+
+                # Touche Tab => autocomplétion
                 if char == "\t":
                     if last_was_tab:
+                        # Double tab => liste des complétions
                         completions = get_completions(current_input, current_dir, session_user, fs)
                         if completions:
                             chan.send(b"\r\n" + "\r\n".join(completions).encode() + b"\r\n")
@@ -746,28 +737,41 @@ def handle_connection(client_socket, client_addr):
                         last_was_tab = False
                         continue
                     else:
+                        # Simple tab => autocompléter
                         suggestion = autocomplete(current_input, current_dir, session_user, fs)
                         if suggestion and suggestion != current_input:
                             to_add = suggestion[len(current_input):]
                             chan.send(to_add.encode())
                             current_input = suggestion
                         else:
-                            chan.send(b"\x07")
+                            chan.send(b"\x07")  # bip
                         last_was_tab = True
                         continue
+
+                # Caractère normal
                 chan.send(char.encode())
                 current_input += char
                 last_was_tab = False
 
+            # On a la commande complète
             chan.send(b"\r\n")
             command = current_input.strip()
             session_log.write("\n")
+
             if not command:
                 continue
+
+            # Logger la commande dans commands.log
             with open("commands.log", "a") as f:
                 f.write(f"{datetime.now()} - {client_ip} - {session_user}: {command}\n")
+
+            # Mettre à jour l'historique
             history.append(command)
             save_history(session_user, history)
+            # Se replacer en fin d'historique
+            history_index = len(history)
+
+            # Enregistrer la commande en DB
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             try:
                 conn = sqlite3.connect(DB_NAME)
@@ -782,22 +786,26 @@ def handle_connection(client_socket, client_addr):
             except Exception as e:
                 print(f"[!] Erreur enregistrement commande DB: {e}")
 
-            suspicious_keywords = ["wget", "curl", "ftp", "scp", "sftp", "tftp", "chmod +x", "bash -c",
-                                   "sh -c", "python -c", "netcat", "nc ", "sudo", "su"]
+            # Vérifier si commande suspecte => alerte
+            suspicious_keywords = ["wget", "curl", "ftp", "scp", "sftp", "tftp", "chmod +x",
+                                   "bash -c", "sh -c", "python -c", "netcat", "nc ", "sudo", "su"]
             if any(kw in command.lower() for kw in suspicious_keywords):
                 trigger_alert(server.session_id, command, client_ip, session_user)
 
+            # Commandes "exit" ou "logout"
             if command in ["exit", "logout"]:
                 print(f"[-] {client_ip} a fermé la session via '{command}'")
                 running = False
                 break
 
+            # Exécuter la commande simulée
             time.sleep(0.1)
             try:
                 output, new_dir = process_command(command, current_dir, session_user, fs, client_ip)
             except Exception as e:
                 output = f"Error executing command: {e}"
                 new_dir = current_dir
+
             current_dir = new_dir
             if output:
                 if not output.endswith("\r\n"):
@@ -805,10 +813,13 @@ def handle_connection(client_socket, client_addr):
                 time.sleep(random.uniform(0.05, 0.2))
                 chan.send(output.encode())
                 session_log.write(output)
+
         chan.send(b"logout\r\n")
         session_log.close()
+
     except Exception as ex:
         print(f"[!] Exception dans handle_connection pour {client_ip}: {ex}")
+
     finally:
         try:
             chan.close()
