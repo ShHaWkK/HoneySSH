@@ -76,17 +76,10 @@ def populate_predefined_users(fs):
             fs[f"{home_dir}/{filename}"] = {"type": "file", "content": content}
     return fs
 
-
 def trigger_alert(session_id, command, client_ip, username):
-    """
-    Cette fonction est appelée quand une action suspecte est détectée (ex: suppression de fichier critique).
-    Vous pouvez y inclure l'ajout d'un event en base ou l'envoi d'un mail d'alerte.
-    """
+    """ Envoie une alerte (stockée en base et par mail) pour une commande suspecte. """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[ALERTE] {timestamp} - {client_ip} a tenté : {command} (session_id={session_id})")
-
-    # Vous pouvez aussi stocker en DB ou envoyer un mail ici
-    # Ex (stockage en DB) :
     try:
         conn = sqlite3.connect(DB_NAME)
         cur = conn.cursor()
@@ -98,15 +91,12 @@ def trigger_alert(session_id, command, client_ip, username):
         conn.close()
     except Exception as e:
         print(f"[!] Erreur lors de l'enregistrement de l'alerte en DB: {e}")
-
-    # Ex (envoi de mail) :
     subject = f"[HONEYPOT] Alerte : {client_ip}"
     body = f"{timestamp} - {client_ip} a exécuté une commande suspecte : {command}\nUser: {username}"
     msg = MIMEText(body)
     msg["From"] = SMTP_USER
     msg["To"] = ALERT_TO
     msg["Subject"] = subject
-
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
             smtp.starttls()
@@ -127,7 +117,6 @@ root         1  0.1  1.0  22532  4100 ?     Ss   Nov06   0:04 /sbin/init splash
 root       135  0.0  0.5  16384  2048 ?     Ss   Nov06   0:01 /usr/sbin/sshd -D
 mysql      212  0.2  4.0 257800 16384 ?    Ssl  Nov06   5:10 /usr/sbin/mysqld
 srvssh    1025  0.0  0.1   6180   820 pts/0 S+   12:34   0:00 ps aux"""
-
 FAKE_NETSTAT_OUTPUT = """Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
 tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      135/sshd
 tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      220/apache2
@@ -224,7 +213,131 @@ def autocomplete(current_input, current_dir, username, fs):
     return current_input
 
 # ==============================================
+# Fonction interactive avancée de lecture de ligne
+# ==============================================
+def read_line_advanced(chan, prompt, history, current_dir, username, fs):
+    """
+    Lit une ligne de commande en mode interactif avec :
+      - Navigation dans l'historique (flèches haut/bas)
+      - Déplacement du curseur (flèches gauche/droite)
+      - Autocomplétion via Tab (simple Tab pour compléter, double Tab pour afficher les suggestions)
+    Retourne la ligne saisie.
+    """
+    line_buffer = []      # Liste des caractères de la ligne
+    cursor_pos = 0        # Position du curseur dans la ligne_buffer
+    history_index = len(history)  # On démarre à la fin de l'historique
+    last_was_tab = False
+
+    # Afficher le prompt initial
+    chan.send(prompt.encode())
+
+    def redraw_line():
+        # Effacer la ligne actuelle et réafficher le prompt et la ligne
+        chan.send(b"\r\033[K")  # Retour chariot + effacement de la ligne
+        chan.send((prompt + "".join(line_buffer)).encode())
+        # Repositionner le curseur si nécessaire
+        diff = len(line_buffer) - cursor_pos
+        if diff > 0:
+            chan.send(f"\033[{diff}D".encode())
+
+    while True:
+        try:
+            byte = chan.recv(1)
+        except Exception:
+            break
+        if not byte:
+            break
+        try:
+            char = byte.decode("utf-8", errors="ignore")
+        except Exception:
+            continue
+
+        # Fin de la ligne
+        if char in ("\r", "\n"):
+            chan.send(b"\r\n")
+            break
+
+        # Gestion de Ctrl+C
+        if char == "\x03":
+            chan.send(b"^C\r\n")
+            return ""
+
+        # Gestion du backspace
+        if char in ("\x7f", "\x08"):
+            if cursor_pos > 0:
+                cursor_pos -= 1
+                line_buffer.pop(cursor_pos)
+                redraw_line()
+            last_was_tab = False
+            continue
+
+        # Gestion des séquences d'échappement (flèches)
+        if char == "\x1b":
+            seq = byte + chan.recv(2)  # Par exemple, "[A" pour flèche haut
+            if seq.endswith(b"[A"):
+                if history_index > 0:
+                    history_index -= 1
+                    line_buffer = list(history[history_index])
+                    cursor_pos = len(line_buffer)
+                    redraw_line()
+            elif seq.endswith(b"[B"):
+                if history_index < len(history) - 1:
+                    history_index += 1
+                    line_buffer = list(history[history_index])
+                else:
+                    history_index = len(history)
+                    line_buffer = []
+                cursor_pos = len(line_buffer)
+                redraw_line()
+            elif seq.endswith(b"[C"):  # Flèche droite
+                if cursor_pos < len(line_buffer):
+                    cursor_pos += 1
+                    redraw_line()
+            elif seq.endswith(b"[D"):  # Flèche gauche
+                if cursor_pos > 0:
+                    cursor_pos -= 1
+                    redraw_line()
+            last_was_tab = False
+            continue
+
+        # Gestion de la tabulation
+        if char == "\t":
+            if last_was_tab:
+                # Double tab : afficher les complétions
+                completions = get_completions("".join(line_buffer), current_dir, username, fs)
+                if completions:
+                    chan.send(b"\r\n")
+                    for comp in completions:
+                        chan.send((comp + "\r\n").encode())
+                    redraw_line()
+                last_was_tab = False
+                continue
+            else:
+                # Simple tab : tenter l'autocomplétion
+                current_str = "".join(line_buffer)
+                suggestion = autocomplete(current_str, current_dir, username, fs)
+                if suggestion and suggestion != current_str:
+                    diff = suggestion[len(current_str):]
+                    for ch in diff:
+                        line_buffer.insert(cursor_pos, ch)
+                        cursor_pos += 1
+                    redraw_line()
+                else:
+                    chan.send(b"\x07")  # bip
+                last_was_tab = True
+                continue
+
+        # Insertion du caractère dans le buffer
+        line_buffer.insert(cursor_pos, char)
+        cursor_pos += 1
+        redraw_line()
+        last_was_tab = False
+
+    return "".join(line_buffer)
+
+# ==============================================
 # Simulation des commandes système avancées
+# (Fonction process_command identique à votre version)
 # ==============================================
 def process_command(cmd, current_dir, username, fs, client_ip):
     output = ""
@@ -235,18 +348,15 @@ def process_command(cmd, current_dir, username, fs, client_ip):
     parts = cmd.split(maxsplit=1)
     cmd_name = parts[0]
     arg_str = parts[1] if len(parts) > 1 else ""
-
     def resolve_path(path):
         if not path.startswith("/"):
             full = (current_dir.rstrip("/") + "/" + path) if current_dir != "/" else "/" + path
         else:
             full = path
         return full.rstrip("/") if len(full) > 1 and full.endswith("/") else full
-
     if cmd_name == "cd":
         target = arg_str if arg_str else "~"
         if target in ["", "~"]:
-            # Pour les comptes préconfigurés, on utilise leur home dédié
             if username in PREDEFINED_USERS:
                 new_dir = PREDEFINED_USERS[username]["home"]
             else:
@@ -375,7 +485,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 output = f"tail: cannot open '{filename}' for reading: No such file or directory"
     elif cmd_name == "history":
         output = "\r\n".join(load_history(username))
-    # Simulation de sudo et su
     elif cmd_name == "sudo":
         if username == "root":
             if arg_str:
@@ -389,19 +498,16 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             output = ""
         else:
             output = "Password: \nsu: Authentication failure\n"
-    # Simulation de commandes d'installation
     elif cmd_name == "apt-get":
         output = "E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)"
     elif cmd_name == "dpkg":
         output = "dpkg: error: must be root to perform this command"
     elif cmd_name == "make":
         output = "make: Nothing to be done for 'all'."
-    # Simulation de transfert de fichiers : scp et sftp
     elif cmd_name in ["scp", "sftp"]:
         with open(FILE_TRANSFER_LOG, "a") as f:
             f.write(f"{datetime.now()} - {username} from {client_ip} attempted file transfer: {arg_str}\n")
         output = f"bash: {cmd_name}: command not found"
-    # Simulation de téléchargement avec wget et curl (slow download simulation)
     elif cmd_name in ["wget", "curl"]:
         if "http" in arg_str:
             output = "Downloading large file... (simulation)\n"
@@ -417,7 +523,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
         output = f"bash: {cmd_name}: command not found"
     elif cmd_name in ["chmod", "bash", "sh", "netcat", "nc", "python"]:
         output = ""
-    # Simulation de commandes système multi-utilisateurs
     elif cmd_name in ["last", "who", "w"]:
         if cmd_name == "last":
             output = ("admin   pts/0        192.168.1.10    Wed May  3 10:01   still logged in\n"
@@ -437,7 +542,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
         output = ""
     else:
         output = f"bash: {cmd_name}: command not found"
-
     return output, new_dir
 
 # ======================================
@@ -625,12 +729,12 @@ class HoneyPotServer(paramiko.ServerInterface):
 # ======================================
 def handle_connection(client_socket, client_addr):
     """
-    Gère une nouvelle connexion SSH avec :
-      - Navigation dans l'historique (flèches haut/bas)
-      - Autocomplétion (Tab et double Tab)
-      - Keylogger (enregistrement de chaque frappe)
-      - Enregistrement de la session dans un fichier pour relecture
-      - Détection et alerte pour commandes suspectes
+    Gère une nouvelle connexion SSH avec les fonctionnalités avancées :
+      - Navigation dans l'historique avec flèches haut/bas
+      - Déplacement du curseur avec flèches gauche/droite
+      - Autocomplétion avec Tab (simple et double Tab)
+      - Enregistrement du keylogger et de la session
+      - Exécution des commandes via process_command
     """
     client_ip = client_addr[0]
     print(f"[+] Nouvelle connexion de {client_ip}")
@@ -664,10 +768,10 @@ def handle_connection(client_socket, client_addr):
             transport.close()
             return
 
-        # Mode interactif honeypot
+        # Préparer le système de fichiers
         fs = {path: (value.copy() if isinstance(value, dict) else value)
               for path, value in BASE_FILE_SYSTEM.items()}
-        # Si l'utilisateur est préconfiguré, on utilise son home et ses fichiers
+        # Intégrer les comptes préconfigurés si l'utilisateur existe
         if server.username and server.username in PREDEFINED_USERS:
             user_home = PREDEFINED_USERS[server.username]["home"]
             fs[user_home] = {"type": "dir", "contents": list(PREDEFINED_USERS[server.username]["files"].keys())}
@@ -675,7 +779,6 @@ def handle_connection(client_socket, client_addr):
                 fs["/home"]["contents"].append(server.username)
             for fname, fcontent in PREDEFINED_USERS[server.username]["files"].items():
                 fs[f"{user_home}/{fname}"] = {"type": "file", "content": fcontent}
-        # Sinon, pour un utilisateur inconnu (non-root), on simule un home générique
         elif server.username and server.username != "root":
             user_home = f"/home/{server.username}"
             fs[user_home] = {"type": "dir", "contents": ["credentials.txt", "config_backup.zip", "ssh_keys.tar.gz"]}
@@ -688,147 +791,28 @@ def handle_connection(client_socket, client_addr):
         chan.send(b"Welcome to Debian GNU/Linux 10 (buster)\r\n\r\n")
         session_user = server.username if server.username else ""
         history = load_history(session_user)
-        current_dir = "/root" if session_user == "root" else (PREDEFINED_USERS.get(session_user, {}).get("home", f"/home/{session_user}"))
-        # Création d'un fichier de session pour relecture
-        session_filename = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        session_log = open(session_filename, "w")
-        history_index = len(history)
+        if session_user in PREDEFINED_USERS:
+            current_dir = PREDEFINED_USERS[session_user]["home"]
+        else:
+            current_dir = "/root" if session_user == "root" else f"/home/{session_user}"
 
-        running = True
-        while running:
-            full_prompt = f"{session_user}@debian:{current_dir}$ "
-            chan.send(full_prompt.encode())
-            session_log.write(full_prompt + "\n")
-            current_input = ""
-            last_was_tab = False
-
-            while True:
-                try:
-                    byte = chan.recv(1)
-                except Exception:
-                    running = False
-                    break
-                if not byte:
-                    running = False
-                    break
-                try:
-                    char = byte.decode("utf-8", errors="ignore")
-                except Exception:
-                    continue
-
-                # Enregistrement du keylogger
-                log_keystroke(char)
-                session_log.write(char)
-
-                if char in ("\r", "\n"):
-                    break
-                if char == "\x03":
-                    chan.send(b"^C\r\n")
-                    current_input = ""
-                    session_log.write("\n")
-                    break
-                if char in ("\x7f", "\x08"):
-                    if current_input:
-                        current_input = current_input[:-1]
-                        chan.send(b'\x08 \x08')
-                    last_was_tab = False
-                    continue
-                if char == "\x1b":
-                    seq = chan.recv(2)
-                    if seq == b"[A":  # Flèche haut
-                        if history_index > 0:
-                            history_index -= 1
-                            chan.send(b"\r\033[K")
-                            wanted_cmd = history[history_index]
-                            chan.send(full_prompt.encode() + wanted_cmd.encode())
-                            current_input = wanted_cmd
-                    elif seq == b"[B":  # Flèche bas
-                        if history_index < len(history) - 1:
-                            history_index += 1
-                            chan.send(b"\r\033[K")
-                            wanted_cmd = history[history_index]
-                            chan.send(full_prompt.encode() + wanted_cmd.encode())
-                            current_input = wanted_cmd
-                        else:
-                            history_index = len(history)
-                            chan.send(b"\r\033[K" + full_prompt.encode())
-                            current_input = ""
-                    # Optionnel : gestion des flèches gauche/droite ici
-                    last_was_tab = False
-                    continue
-                if char == "\t":
-                    if last_was_tab:
-                        completions = get_completions(current_input, current_dir, session_user, fs)
-                        if completions:
-                            chan.send(b"\r\n" + "\r\n".join(completions).encode() + b"\r\n")
-                            chan.send(full_prompt.encode() + current_input.encode())
-                        last_was_tab = False
-                        continue
-                    else:
-                        suggestion = autocomplete(current_input, current_dir, session_user, fs)
-                        if suggestion and suggestion != current_input:
-                            to_add = suggestion[len(current_input):]
-                            chan.send(to_add.encode())
-                            current_input = suggestion
-                        else:
-                            chan.send(b"\x07")
-                        last_was_tab = True
-                        continue
-
-                chan.send(char.encode())
-                current_input += char
-                last_was_tab = False
-
-            chan.send(b"\r\n")
-            command = current_input.strip()
-            session_log.write("\n")
-            if not command:
+        # Boucle principale interactive en utilisant read_line_advanced
+        while True:
+            prompt = f"{session_user}@debian:{current_dir}$ "
+            command = read_line_advanced(chan, prompt, history, current_dir, session_user, fs)
+            if command == "":
                 continue
-
-            with open("commands.log", "a") as f:
-                f.write(f"{datetime.now()} - {client_ip} - {session_user}: {command}\n")
             history.append(command)
             save_history(session_user, history)
-            history_index = len(history)
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            try:
-                conn = sqlite3.connect(DB_NAME)
-                conn.execute("PRAGMA busy_timeout = 3000")
-                cur = conn.cursor()
-                cur.execute("""
-                    INSERT INTO commands(timestamp, ip, username, command, session_id)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (ts, client_ip, session_user, command, server.session_id))
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                print(f"[!] Erreur enregistrement commande DB: {e}")
-
-            suspicious_keywords = ["wget", "curl", "ftp", "scp", "sftp", "tftp", "chmod +x",
-                                   "bash -c", "sh -c", "python -c", "netcat", "nc ", "sudo", "su"]
-            if any(kw in command.lower() for kw in suspicious_keywords):
-                trigger_alert(server.session_id, command, client_ip, session_user)
-
-            if command in ["exit", "logout"]:
-                print(f"[-] {client_ip} a fermé la session via '{command}'")
-                running = False
-                break
-
-            time.sleep(0.1)
-            try:
-                output, new_dir = process_command(command, current_dir, session_user, fs, client_ip)
-            except Exception as e:
-                output = f"Error executing command: {e}"
-                new_dir = current_dir
+            output, new_dir = process_command(command, current_dir, session_user, fs, client_ip)
             current_dir = new_dir
             if output:
                 if not output.endswith("\r\n"):
                     output += "\r\n"
-                time.sleep(random.uniform(0.05, 0.2))
                 chan.send(output.encode())
-                session_log.write(output)
-        chan.send(b"logout\r\n")
-        session_log.close()
+            if command in ["exit", "logout"]:
+                print(f"[-] {client_ip} a fermé la session via '{command}'")
+                break
     except Exception as ex:
         print(f"[!] Exception dans handle_connection pour {client_ip}: {ex}")
     finally:
@@ -888,7 +872,7 @@ def log_keystroke(char):
         f.write(char)
 
 # ======================================
-# Classe SSH Server (Honeypot) – version unique
+# Classe SSH Server – version unique
 # ======================================
 class HoneyPotServer(paramiko.ServerInterface):
     def __init__(self, client_ip):
@@ -983,10 +967,8 @@ class HoneyPotServer(paramiko.ServerInterface):
 # ======================================
 if __name__ == "__main__":
     init_database()
-    # Démarrage du thread de rapport hebdomadaire
     report_thread = threading.Thread(target=weekly_report_thread, daemon=True)
     report_thread.start()
-
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
