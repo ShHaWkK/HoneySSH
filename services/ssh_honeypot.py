@@ -40,7 +40,7 @@ ALERT_TO = "admin@example.com"          # Adresse destinataire
 
 # ================================
 # Comptes utilisateurs préconfigurés
-# =============================ES===
+# ================================
 PREDEFINED_USERS = {
     "admin": {
         "home": "/home/admin",
@@ -320,14 +320,13 @@ def get_completions(current_input, current_dir, username, fs):
         "ls", "cd", "pwd", "whoami", "id", "uname", "echo", "cat", "rm",
         "ps", "netstat", "uptime", "df", "exit", "logout", "find", "grep",
         "head", "tail", "history", "sudo", "su", "apt-get", "dpkg", "make",
-        "last", "who", "w", "scp", "sftp"
+        "last", "who", "w", "scp", "sftp", "vulndb", "oldconfig", "vulnweb"
     ]
     if " " not in current_input:
         return sorted([cmd for cmd in base_cmds if cmd.startswith(current_input)])
     else:
         parts = current_input.split(" ", 1)
         partial = parts[1]
-        # Autocomplétion sur le chemin (dans fs) s’il commence par partial
         return sorted([path for path in fs.keys() if path.startswith(partial)])
 
 def autocomplete(current_input, current_dir, username, fs):
@@ -348,7 +347,6 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs):
     history_index = len(history)
     last_was_tab = False
 
-    # Prompt coloré (utilisateur en vert, machine en bleu)
     parts = prompt.split("@")
     colored_prompt = f"\033[1;32m{parts[0]}\033[0m@{parts[1]}"
 
@@ -382,7 +380,7 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs):
             chan.send(b"^C\r\n")
             return ""
 
-        if char in ("\x7f", "\x08"):  # Backspace
+        if char in ("\x7f", "\x08"):
             if cursor_pos > 0:
                 cursor_pos -= 1
                 line_buffer.pop(cursor_pos)
@@ -390,15 +388,15 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs):
             last_was_tab = False
             continue
 
-        if char == "\x1b":  # Séquence d'échappement (flèches)
+        if char == "\x1b":
             seq = byte + chan.recv(2)
-            if seq.endswith(b"[A"):  # flèche haut
+            if seq.endswith(b"[A"):
                 if history_index > 0:
                     history_index -= 1
                     line_buffer = list(history[history_index])
                     cursor_pos = len(line_buffer)
                     redraw_line()
-            elif seq.endswith(b"[B"):  # flèche bas
+            elif seq.endswith(b"[B"):
                 if history_index < len(history) - 1:
                     history_index += 1
                     line_buffer = list(history[history_index])
@@ -407,11 +405,11 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs):
                     line_buffer = []
                 cursor_pos = len(line_buffer)
                 redraw_line()
-            elif seq.endswith(b"[C"):  # flèche droite
+            elif seq.endswith(b"[C"):
                 if cursor_pos < len(line_buffer):
                     cursor_pos += 1
                     redraw_line()
-            elif seq.endswith(b"[D"):  # flèche gauche
+            elif seq.endswith(b"[D"):
                 if cursor_pos > 0:
                     cursor_pos -= 1
                     redraw_line()
@@ -469,7 +467,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             full = path
         return full.rstrip("/") if len(full) > 1 and full.endswith("/") else full
 
-    # Gestion "cd"
     if cmd_name == "cd":
         target = arg_str if arg_str else "~"
         if target in ["", "~"]:
@@ -483,7 +480,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             else:
                 output = f"bash: cd: {target}: No such file or directory"
 
-    # Gestion "ls"
     elif cmd_name == "ls":
         target_path = current_dir
         if arg_str and not arg_str.startswith("-"):
@@ -496,33 +492,27 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             contents = fs[target_path]["contents"] if target_path in fs and fs[target_path]["type"] == "dir" else []
             output = "\r\n".join(contents)
 
-    # Gestion "pwd"
     elif cmd_name == "pwd":
         output = current_dir
 
-    # Gestion "whoami"
     elif cmd_name == "whoami":
         output = username
 
-    # Gestion "id"
     elif cmd_name == "id":
         if username == "root":
             output = "uid=0(root) gid=0(root) groups=0(root)"
         else:
             output = f"uid=1000({username}) gid=1000({username}) groups=1000({username}),27(sudo)"
 
-    # Gestion "uname"
     elif cmd_name == "uname":
         if arg_str:
             output = "Linux debian 4.19.0-18-amd64 #1 SMP Debian 4.19.208-1 (Debian)"
         else:
             output = "Linux"
 
-    # Gestion "echo"
     elif cmd_name == "echo":
         output = arg_str
 
-    # Gestion "cat"
     elif cmd_name == "cat":
         if not arg_str:
             output = ""
@@ -541,7 +531,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             else:
                 output = f"cat: {arg_str}: No such file or directory"
 
-    # Gestion "rm"
     elif cmd_name == "rm":
         if not arg_str:
             output = "rm: missing operand"
@@ -569,23 +558,18 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             else:
                 output = f"rm: cannot remove '{arg_str}': No such file or directory"
 
-    # Gestion "ps"
     elif cmd_name == "ps":
         output = get_dynamic_ps()
 
-    # Gestion "netstat"
     elif cmd_name == "netstat":
         output = FAKE_NETSTAT_OUTPUT
 
-    # Gestion "uptime"
     elif cmd_name == "uptime":
         output = get_dynamic_uptime()
 
-    # Gestion "df"
     elif cmd_name == "df":
         output = get_dynamic_df()
 
-    # Gestion "find"
     elif cmd_name == "find":
         args = arg_str.split()
         if not args:
@@ -596,7 +580,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             results = [path for path in fs.keys() if path.startswith(directory) and (pattern == "" or pattern in path)]
             output = "\r\n".join(results)
 
-    # Gestion "grep"
     elif cmd_name == "grep":
         args = arg_str.split()
         if len(args) < 2:
@@ -612,7 +595,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             else:
                 output = f"grep: {filename}: No such file or directory"
 
-    # Gestion "head"
     elif cmd_name == "head":
         args = arg_str.split()
         if not args:
@@ -626,7 +608,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             else:
                 output = f"head: cannot open '{filename}' for reading: No such file or directory"
 
-    # Gestion "tail"
     elif cmd_name == "tail":
         args = arg_str.split()
         if not args:
@@ -640,11 +621,26 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             else:
                 output = f"tail: cannot open '{filename}' for reading: No such file or directory"
 
-    # Gestion "history"
+    # --- Simulation de vulnérabilités ---
+    elif cmd_name == "vulndb":
+        output = ("Connecting to vulnerable database service...\n"
+                  "Default credentials: username='root', password='toor'\n"
+                  "Warning: SQL Injection vulnerability detected. No security measures are implemented.\n")
+    elif cmd_name == "oldconfig":
+        output = ("# Obsolete and vulnerable configuration file\n"
+                  "DEBUG_MODE=true\n"
+                  "password=123456\n"
+                  "allow_remote_access=yes\n"
+                  "Warning: This configuration exposes critical services and is known to be insecure.\n")
+    elif cmd_name == "vulnweb":
+        output = ("Vulnerable web server detected on port 80.\n"
+                  "Default admin credentials: admin:admin123\n"
+                  "Exploitable vulnerability: Remote Code Execution possible (CVE-XXXX-YYYY).\n")
+    # -------------------------------------
+
     elif cmd_name == "history":
         output = "\r\n".join(load_history(username))
 
-    # Gestion "sudo"
     elif cmd_name == "sudo":
         if username == "root":
             if arg_str:
@@ -658,32 +654,26 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                       f"Sorry, try again.\n"
                       f"sudo: 3 incorrect password attempts\n")
 
-    # Gestion "su"
     elif cmd_name in ["su", "su-"]:
         if username == "root":
             output = ""
         else:
             output = "Password: \nsu: Authentication failure\n"
 
-    # Gestion "apt-get"
     elif cmd_name == "apt-get":
         output = "E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)"
 
-    # Gestion "dpkg"
     elif cmd_name == "dpkg":
         output = "dpkg: error: must be root to perform this command"
 
-    # Gestion "make"
     elif cmd_name == "make":
         output = "make: Nothing to be done for 'all'."
 
-    # Gestion "scp" / "sftp"
     elif cmd_name in ["scp", "sftp"]:
         with open(FILE_TRANSFER_LOG, "a") as f:
             f.write(f"{datetime.now()} - {username} from {client_ip} attempted file transfer: {arg_str}\n")
         output = f"bash: {cmd_name}: command not found"
 
-    # Gestion "wget"/"curl"
     elif cmd_name in ["wget", "curl"]:
         if "http" in arg_str:
             output = "Downloading large file... (simulation)\n"
@@ -696,15 +686,12 @@ def process_command(cmd, current_dir, username, fs, client_ip):
         else:
             output = f"bash: {cmd_name}: command not found"
 
-    # Gestion "ftp" / "tftp"
     elif cmd_name in ["ftp", "tftp"]:
         output = f"bash: {cmd_name}: command not found"
 
-    # Gestion "chmod", "bash", "sh", "netcat", "nc", "python"
     elif cmd_name in ["chmod", "bash", "sh", "netcat", "nc", "python"]:
         output = ""
 
-    # Gestion "last", "who", "w"
     elif cmd_name in ["last", "who", "w"]:
         if cmd_name == "last":
             output = ("admin   pts/0        192.168.1.10    Wed May  3 10:01   still logged in\n"
@@ -720,11 +707,10 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                       "admin    tty7     :0               10:00   1:00m  0.20s  0.20s /usr/bin/startx\n"
                       "devops   pts/0    192.168.1.11     09:55   5:00   0.10s  0.10s bash\n"
                       "dbadmin  pts/1    192.168.1.12     09:50   3:00   0.15s  0.15s bash")
-
-    # Gestion "exit", "logout"
+                      
     elif cmd_name in ["exit", "logout"]:
         output = ""
-
+        
     else:
         output = f"bash: {cmd_name}: command not found"
 
