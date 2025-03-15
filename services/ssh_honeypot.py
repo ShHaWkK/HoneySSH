@@ -10,6 +10,8 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from fpdf import FPDF  # Installer avec : pip3 install fpdf
+import tarfile
+import shutil
 
 # =======================
 # Configuration Variables
@@ -38,7 +40,7 @@ ALERT_TO = "admin@example.com"          # Adresse destinataire
 
 # ================================
 # Comptes utilisateurs préconfigurés
-# ================================
+# =============================ES===
 PREDEFINED_USERS = {
     "admin": {
         "home": "/home/admin",
@@ -511,7 +513,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
 
     # Gestion "uname"
     elif cmd_name == "uname":
-        # Si on fait "uname -a", on simule un output plus complet
         if arg_str:
             output = "Linux debian 4.19.0-18-amd64 #1 SMP Debian 4.19.208-1 (Debian)"
         else:
@@ -527,7 +528,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             output = ""
         else:
             file_path = resolve_path(arg_str)
-            # Fichier de config dynamique
             if file_path == "/etc/myconfig.conf":
                 output = get_dynamic_config()
             elif file_path == "/etc/shadow" and username != "root":
@@ -547,7 +547,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             output = "rm: missing operand"
         else:
             target_path = resolve_path(arg_str)
-            # Fichiers critiques
             if target_path in ["/etc/passwd", "/etc/shadow", "/root/.ssh/authorized_keys", "/root/rootkit_detector.sh"]:
                 output = f"rm: cannot remove '{arg_str}': Permission denied (critical file)"
                 trigger_alert(-1, f"Tentative de suppression de {target_path}", client_ip, username)
@@ -570,7 +569,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             else:
                 output = f"rm: cannot remove '{arg_str}': No such file or directory"
 
-    # Gestion "ps" (dynamique)
+    # Gestion "ps"
     elif cmd_name == "ps":
         output = get_dynamic_ps()
 
@@ -645,7 +644,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
     elif cmd_name == "history":
         output = "\r\n".join(load_history(username))
 
-    # Gestion "sudo" (simulation)
+    # Gestion "sudo"
     elif cmd_name == "sudo":
         if username == "root":
             if arg_str:
@@ -769,7 +768,6 @@ class HoneyPotServer(paramiko.ServerInterface):
         success = 1
         redirected_flag = 0
 
-        # Si on active la redirection vers un vrai SSH
         if ENABLE_REDIRECTION:
             try:
                 real_client = paramiko.SSHClient()
@@ -787,7 +785,6 @@ class HoneyPotServer(paramiko.ServerInterface):
                 except Exception:
                     pass
 
-        # Enregistrement en base
         try:
             conn = sqlite3.connect(DB_NAME)
             conn.execute("PRAGMA busy_timeout = 3000")
@@ -799,7 +796,6 @@ class HoneyPotServer(paramiko.ServerInterface):
             conn.commit()
             self.session_id = cur.lastrowid
 
-            # Détection brute-force
             cur.execute("SELECT COUNT(*) FROM login_attempts WHERE ip = ?", (self.client_ip,))
             count = cur.fetchone()[0]
             if count >= BRUTE_FORCE_THRESHOLD:
@@ -869,11 +865,9 @@ def handle_connection(client_socket, client_addr):
             transport.close()
             return
 
-        # Copie du filesystem de base
         fs = {path: (value.copy() if isinstance(value, dict) else value)
               for path, value in BASE_FILE_SYSTEM.items()}
 
-        # Si l'utilisateur correspond à un compte préconfiguré
         if server.username and server.username in PREDEFINED_USERS:
             user_home = PREDEFINED_USERS[server.username]["home"]
             fs[user_home] = {"type": "dir", "contents": list(PREDEFINED_USERS[server.username]["files"].keys())}
@@ -881,8 +875,6 @@ def handle_connection(client_socket, client_addr):
                 fs["/home"]["contents"].append(server.username)
             for fname, fcontent in PREDEFINED_USERS[server.username]["files"].items():
                 fs[f"{user_home}/{fname}"] = {"type": "file", "content": fcontent}
-
-        # Sinon, utilisateur inconnu (non-root)
         elif server.username and server.username != "root":
             user_home = f"/home/{server.username}"
             fs[user_home] = {"type": "dir", "contents": ["credentials.txt", "config_backup.zip", "ssh_keys.tar.gz"]}
@@ -901,7 +893,6 @@ def handle_connection(client_socket, client_addr):
         else:
             current_dir = "/root" if session_user == "root" else f"/home/{session_user}"
 
-        # Boucle interactive (shell complet)
         while True:
             prompt = f"{session_user}@debian:{current_dir}$ "
             command = read_line_advanced(chan, prompt, history, current_dir, session_user, fs)
@@ -911,7 +902,6 @@ def handle_connection(client_socket, client_addr):
             history.append(command)
             save_history(session_user, history)
 
-            # Exécution de la commande
             output, new_dir = process_command(command, current_dir, session_user, fs, client_ip)
             current_dir = new_dir
             if output:
@@ -919,7 +909,6 @@ def handle_connection(client_socket, client_addr):
                     output += "\r\n"
                 chan.send(output.encode())
 
-            # Sortie du shell
             if command in ["exit", "logout"]:
                 print(f"[-] {client_ip} a fermé la session via '{command}'")
                 break
@@ -934,19 +923,160 @@ def handle_connection(client_socket, client_addr):
         transport.close()
 
 # ======================================
-# Thread pour le rapport hebdomadaire
+# Création de l'arborescence et de l'archive
 # ======================================
-def weekly_report_thread():
-    while True:
-        time.sleep(7 * 24 * 3600)
-        generate_weekly_report()
+def create_file_structure_archive():
+    base_dir = "honeypot"
+    directories = [
+        os.path.join(base_dir, "home"),
+        os.path.join(base_dir, "home", "admin"),
+        os.path.join(base_dir, "etc"),
+        os.path.join(base_dir, "var"),
+        os.path.join(base_dir, "var", "www"),
+        os.path.join(base_dir, "scripts"),
+        os.path.join(base_dir, "logs"),
+    ]
+    
+    for d in directories:
+        os.makedirs(d, exist_ok=True)
+        
+    # honeypot/home/admin/passwords.txt (60 fausses connexions)
+    passwords_path = os.path.join(base_dir, "home", "admin", "passwords.txt")
+    with open(passwords_path, "w") as f:
+        for i in range(60):
+            fake_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            fake_ip = f"192.168.1.{random.randint(2,254)}"
+            f.write(f"{fake_time} - Failed login for user admin from {fake_ip}\n")
+            
+    # honeypot/home/admin/.bash_history (historique factice des commandes)
+    bash_history_path = os.path.join(base_dir, "home", "admin", ".bash_history")
+    with open(bash_history_path, "w") as f:
+        fake_commands = [
+            "ls -la",
+            "cat /etc/passwd",
+            "whoami",
+            "sudo apt-get update",
+            "tail -n 50 /var/log/syslog",
+            "echo 'Hello World'",
+            "ps aux",
+            "cd /var/www",
+            "vim index.php",
+            "rm -rf /tmp/*"
+        ]
+        for _ in range(60):
+            f.write(random.choice(fake_commands) + "\n")
+            
+    # honeypot/home/admin/confidential-notes.txt (fichier d’appât)
+    confidential_notes_path = os.path.join(base_dir, "home", "admin", "confidential-notes.txt")
+    with open(confidential_notes_path, "w") as f:
+        f.write("Top Secret:\nNe divulguez sous aucun prétexte les informations suivantes...\nDétails sensibles ici.\n")
+        
+    # honeypot/home/admin/ssh_config_backup.conf (fausse sauvegarde de config SSH)
+    ssh_config_backup_path = os.path.join(base_dir, "home", "admin", "ssh_config_backup.conf")
+    with open(ssh_config_backup_path, "w") as f:
+        f.write(
+            "# SSH configuration backup\n"
+            "Port 22\n"
+            "PermitRootLogin no\n"
+            "PasswordAuthentication yes\n"
+            "ChallengeResponseAuthentication no\n"
+            "UsePAM yes\n"
+            "X11Forwarding yes\n"
+            "PrintMotd no\n"
+            "AcceptEnv LANG LC_*\n"
+            "Subsystem sftp /usr/lib/openssh/sftp-server\n"
+        )
+        
+    # honeypot/etc/db_config.ini
+    db_config_path = os.path.join(base_dir, "etc", "db_config.ini")
+    with open(db_config_path, "w") as f:
+        f.write(
+            "[database]\n"
+            "host = 127.0.0.1\n"
+            "port = 3306\n"
+            "user = dbadmin\n"
+            "password = secret123\n"
+            "dbname = honeypot_db\n"
+        )
+        
+    # honeypot/etc/system.log
+    system_log_path = os.path.join(base_dir, "etc", "system.log")
+    with open(system_log_path, "w") as f:
+        f.write("Mar 15 12:00:00 debian systemd[1]: Starting system logging...\nMar 15 12:00:05 debian systemd[1]: Started system logging.\n")
+        
+    # honeypot/var/www/index.php
+    index_php_path = os.path.join(base_dir, "var", "www", "index.php")
+    with open(index_php_path, "w") as f:
+        f.write("<?php\n echo 'Welcome to the honeypot website!';\n?>\n")
+        
+    # honeypot/var/www/database_dump.sql (faux dump SQL)
+    database_dump_path = os.path.join(base_dir, "var", "www", "database_dump.sql")
+    with open(database_dump_path, "w") as f:
+        f.write(
+            "-- Fake SQL dump\n"
+            "DROP TABLE IF EXISTS users;\n"
+            "CREATE TABLE users (id INT PRIMARY KEY, username VARCHAR(50), password VARCHAR(50));\n"
+            "INSERT INTO users (id, username, password) VALUES (1, 'admin', 'supersecret');\n"
+            "INSERT INTO users (id, username, password) VALUES (2, 'guest', 'guest');\n"
+            "INSERT INTO users (id, username, password) VALUES (3, 'user1', 'password1');\n"
+            "INSERT INTO users (id, username, password) VALUES (4, 'user2', 'password2');\n"
+            "INSERT INTO users (id, username, password) VALUES (5, 'user3', 'password3');\n"
+            "INSERT INTO users (id, username, password) VALUES (6, 'user4', 'password4');\n"
+            "INSERT INTO users (id, username, password) VALUES (7, 'user5', 'password5');\n"
+            "INSERT INTO users (id, username, password) VALUES (8, 'user6', 'password6');\n"
+            "INSERT INTO users (id, username, password) VALUES (9, 'user7', 'password7');\n"
+            "INSERT INTO users (id, username, password) VALUES (10, 'user8', 'password8');\n"
+            "INSERT INTO users (id, username, password) VALUES (11, 'user9', 'password9');\n"
+            "INSERT INTO users (id, username, password) VALUES (12, 'user10', 'password10');\n"
+            "INSERT INTO users (id, username, password) VALUES (13, 'user11', 'password11');\n"
+            "INSERT INTO users (id, username, password) VALUES (14, 'user12', 'password12');\n"
+            "INSERT INTO users (id, username, password) VALUES (15, 'user13', 'password13');\n"
+            "INSERT INTO users (id, username, password) VALUES (16, 'user14', 'password14');\n"
+            "INSERT INTO users (id, username, password) VALUES (17, 'user15', 'password15');\n"
+            "INSERT INTO users (id, username, password) VALUES (18, 'user16', 'password16');\n"
+            "INSERT INTO users (id, username, password) VALUES (19, 'user17', 'password17');\n"
+            "INSERT INTO users (id, username, password) VALUES (20, 'user18', 'password18');\n"
+            "INSERT INTO users (id, username, password) VALUES (21, 'user19', 'password19');\n"
+            "INSERT INTO users (id, username, password) VALUES (22, 'user20', 'password20');\n"
+        )
+        
+    # honeypot/scripts/backup.sh
+    backup_sh_path = os.path.join(base_dir, "scripts", "backup.sh")
+    with open(backup_sh_path, "w") as f:
+        f.write("#!/bin/bash\n# Fake backup script\ntar -czf /backup/$(date +%F).tar.gz /important_data\n")
+        
+    # honeypot/scripts/deploy.sh
+    deploy_sh_path = os.path.join(base_dir, "scripts", "deploy.sh")
+    with open(deploy_sh_path, "w") as f:
+        f.write("#!/bin/bash\n# Fake deploy script\nsystemctl restart apache2\n")
+        
+    # honeypot/logs/auth.log
+    auth_log_path = os.path.join(base_dir, "logs", "auth.log")
+    with open(auth_log_path, "w") as f:
+        f.write("Mar 15 12:00:10 debian sshd[1234]: Failed password for invalid user admin from 192.168.1.50 port 2222 ssh2\n")
+        
+    # honeypot/logs/ssh_access.log
+    ssh_access_log_path = os.path.join(base_dir, "logs", "ssh_access.log")
+    with open(ssh_access_log_path, "w") as f:
+        f.write("Mar 15 12:01:00 debian sshd[1234]: Accepted password for admin from 192.168.1.51 port 2222 ssh2\n")
+        
+    archive_path = "/mnt/data/honeypot.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as tar:
+        tar.add(base_dir, arcname=os.path.basename(base_dir))
+        
+    shutil.rmtree(base_dir)
+    
+    print(f"Archive created at {archive_path}")
 
 # ======================================
 # Boucle principale
 # ======================================
 if __name__ == "__main__":
     init_database()
-
+    
+    # Création de l'arborescence et de l'archive
+    create_file_structure_archive()
+    
     # Lancement du thread de rapport hebdomadaire
     report_thread = threading.Thread(target=weekly_report_thread, daemon=True)
     report_thread.start()
