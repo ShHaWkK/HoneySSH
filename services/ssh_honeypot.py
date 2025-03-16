@@ -9,9 +9,9 @@ from datetime import datetime
 import os
 import smtplib
 from email.mime.text import MIMEText
-from fpdf import FPDF  # Installer avec : pip3 install fpdf
-import tarfile
-import shutil
+from fpdf import FPDF
+# import tarfile
+# import shutil
 
 # =======================
 # Configuration Variables
@@ -682,10 +682,8 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             state = random.choice(["ESTABLISHED", "CLOSE_WAIT", "TIME_WAIT"])
             logs.append(f"{time_stamp} {src_ip}:{random.randint(1000,65000)} -> {dst_ip}:{port} {state}")
         output = "\r\n".join(logs) + "\r\n"
-
     elif cmd_name == "history":
         output = "\r\n".join(load_history(username))
-
     elif cmd_name == "sudo":
         if username == "root":
             if arg_str:
@@ -953,15 +951,14 @@ def handle_connection(client_socket, client_addr):
         transport.close()
 
 # ================================
-# Création de l'arborescence et de l'archive
+# Création de l'arborescence (sans archive)
 # ================================
-def create_file_structure_archive():
+def create_file_structure():
     """
-    Crée localement une arborescence factice (honeypot/) avec des fichiers leurres,
-    puis archive le tout dans /mnt/data/honeypot.tar.gz.
-    Vous pouvez modifier ou commenter cette fonction si vous ne souhaitez pas d'archive.
+    Crée localement une arborescence factice (Confidentiel/) avec des fichiers leurres.
+    Les dossiers et fichiers sont créés sur le disque pour piéger les attaquants.
     """
-    base_dir = "honeypot"
+    base_dir = "Confidentiel"
     directories = [
         os.path.join(base_dir, "home"),
         os.path.join(base_dir, "home", "admin"),
@@ -1058,38 +1055,39 @@ def create_file_structure_archive():
             "INSERT INTO users (id, username, password) VALUES (1, 'admin', 'supersecret');\n"
             "INSERT INTO users (id, username, password) VALUES (2, 'guest', 'guest');\n"
             "INSERT INTO users (id, username, password) VALUES (3, 'user1', 'password1');\n"
-            "...\n"
+            "INSERT INTO users (id, username, password) VALUES (4, 'user2', 'password2');\n"
+            "INSERT INTO users (id, username, password) VALUES (5, 'user3', 'password3');\n"
+            "INSERT INTO users (id, username, password) VALUES (6, 'user4', 'password4');\n"
+            "INSERT INTO users (id, username, password) VALUES (7, 'user5', 'password5');\n"
+            "INSERT INTO users (id, username, password) VALUES (8, 'user6', 'password6');\n"
+            "INSERT INTO users (id, username, password) VALUES (9, 'user7', 'password7');\n"
+            "INSERT INTO users (id, username, password) VALUES (10, 'user8', 'password8');\n"
+            "INSERT INTO users (id, username, password) VALUES (11, 'user9', 'password9');\n"
+            "INSERT INTO users (id, username, password) VALUES (12, 'user10', 'password10');\n"
+            "INSERT INTO users (id, username, password) VALUES (13, 'user11', 'password11');\n"
+            "INSERT INTO users (id, username, password) VALUES (14, 'user12', 'password12');\n"
+            "INSERT INTO users (id, username, password) VALUES (15, 'user13', 'password13');\n"
+            "INSERT INTO users (id, username, password) VALUES (16, 'user14', 'password14');\n"
+            "INSERT INTO users (id, username, password) VALUES (17, 'user15', 'password15');\n"
+            "INSERT INTO users (id, username, password) VALUES (18, 'user16', 'password16');\n"
+            "INSERT INTO users (id, username, password) VALUES (19, 'user17', 'password17');\n"
+            "INSERT INTO users (id, username, password) VALUES (20, 'user18', 'password18');\n"
+            "INSERT INTO users (id, username, password) VALUES (21, 'user19', 'password19');\n"
             "INSERT INTO users (id, username, password) VALUES (22, 'user20', 'password20');\n"
         )
 
-    backup_sh_path = os.path.join(base_dir, "scripts", "backup.sh")
-    with open(backup_sh_path, "w") as f:
-        f.write("#!/bin/bash\n# Fake backup script\ntar -czf /backup/$(date +%F).tar.gz /important_data\n")
-
-    deploy_sh_path = os.path.join(base_dir, "scripts", "deploy.sh")
-    with open(deploy_sh_path, "w") as f:
-        f.write("#!/bin/bash\n# Fake deploy script\nsystemctl restart apache2\n")
-
-    auth_log_path = os.path.join(base_dir, "logs", "auth.log")
-    with open(auth_log_path, "w") as f:
-        f.write("Mar 15 12:00:10 debian sshd[1234]: Failed password for invalid user admin from 192.168.1.50 port 2222 ssh2\n")
-
-    ssh_access_log_path = os.path.join(base_dir, "logs", "ssh_access.log")
-    with open(ssh_access_log_path, "w") as f:
-        f.write("Mar 15 12:01:00 debian sshd[1234]: Accepted password for admin from 192.168.1.51 port 2222 ssh2\n")
-
-    archive_path = "/mnt/data/back.tar.gz"
-    with tarfile.open(archive_path, "w:gz") as tar:
-        tar.add(base_dir, arcname=os.path.basename(base_dir))
-    shutil.rmtree(base_dir)
-    print(f"Archive created at {archive_path}")
+    # Ici, nous ne créons plus d'archive et nous ne supprimons pas le dossier
+    print(f"Structure de fichiers créée dans le dossier '{base_dir}'.")
 
 # ======================================
 # Boucle principale
 # ======================================
 if __name__ == "__main__":
     init_database()
-    create_file_structure_archive()
+    # Création de l'arborescence et des fichiers leurres (sans archive)
+    create_file_structure()
+
+    # Démarrage du thread de rapport hebdomadaire
     report_thread = threading.Thread(target=weekly_report_thread, daemon=True)
     report_thread.start()
 
@@ -1113,3 +1111,4 @@ if __name__ == "__main__":
         print("\n[*] Arrêt du honeypot.")
     finally:
         server_sock.close()
+        print("[*] Serveur fermé.")
