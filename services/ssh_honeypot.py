@@ -121,7 +121,8 @@ def get_dynamic_uptime():
 def get_dynamic_ps():
     lines = []
     lines.append("USER       PID %CPU %MEM    VSZ   RSS TTY   STAT START   TIME COMMAND")
-    for i in range(1, 7):
+    # Génération de 6 processus standards
+    for i in range(6):
         user = random.choice(["root", "admin", "devops", "dbadmin"])
         pid = random.randint(1, 5000)
         cpu = round(random.uniform(0.0, 5.0), 1)
@@ -134,6 +135,9 @@ def get_dynamic_ps():
         time_str = f"{random.randint(0,2)}:{random.randint(0,59):02d}"
         command = random.choice(["/sbin/init", "/usr/sbin/sshd -D", "/usr/bin/python", "/usr/bin/nginx"])
         lines.append(f"{user:<10}{pid:<5}{cpu:<5}{mem:<5}{vsz:<7}{rss:<5}{tty:<7}{stat:<5}{start:<8}{time_str:<6}{command}")
+    # Ajout aléatoire d'un processus suspect
+    if random.random() < 0.3:
+        lines.append("suspicious  9999 99.9 50.0 999999 99999 ?        Z    Oct01  99:99 /usr/bin/malware")
     return "\r\n".join(lines)
 
 def get_dynamic_config():
@@ -242,7 +246,8 @@ def get_completions(current_input, current_dir, username, fs):
         "ls", "cd", "pwd", "whoami", "id", "uname", "echo", "cat", "rm",
         "ps", "netstat", "uptime", "df", "exit", "logout", "find", "grep",
         "head", "tail", "history", "sudo", "su", "apt-get", "dpkg", "make",
-        "last", "who", "w", "scp", "sftp", "vulndb", "oldconfig", "vulnweb"
+        "last", "who", "w", "scp", "sftp", "vulndb", "oldconfig", "vulnweb",
+        "ftp", "smb", "db", "netlog"
     ]
     if " " not in current_input:
         return sorted([cmd for cmd in base_cmds if cmd.startswith(current_input)])
@@ -309,7 +314,6 @@ def generate_weekly_report():
     cur.execute("SELECT * FROM events")
     events = cur.fetchall()
     conn.close()
-
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", "B", 16)
@@ -356,17 +360,14 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
     cursor_pos = 0
     history_index = len(history)
     last_was_tab = False
-
     colored_prompt = f"\033[1;32m{prompt.split('@')[0]}\033[0m@{prompt.split('@')[1]}"
     chan.send(colored_prompt.encode())
-
     def redraw_line():
         chan.send(b"\r\033[K")
         chan.send((colored_prompt + "".join(line_buffer)).encode())
         diff = len(line_buffer) - cursor_pos
         if diff > 0:
             chan.send(f"\033[{diff}D".encode())
-
     last_key_time = time.time()
     while True:
         try:
@@ -375,22 +376,18 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
             break
         if not byte:
             break
-
         try:
             char = byte.decode("utf-8", errors="ignore")
         except Exception:
             continue
-
         current_time = time.time()
         delay = current_time - last_key_time
         last_key_time = current_time
         advanced_keylog(session_log, char, delay)
-
         if char in ("\r", "\n"):
             chan.send(b"\r\n")
             session_log.write("\n")
             break
-
         if char == "\x03":
             chan.send(b"^C\r\n")
             return ""
@@ -469,14 +466,12 @@ def process_command(cmd, current_dir, username, fs, client_ip):
     parts = cmd.split(maxsplit=1)
     cmd_name = parts[0]
     arg_str = parts[1] if len(parts) > 1 else ""
-
     def resolve_path(path):
         if not path.startswith("/"):
             full = (current_dir.rstrip("/") + "/" + path) if current_dir != "/" else "/" + path
         else:
             full = path
         return full.rstrip("/") if len(full) > 1 and full.endswith("/") else full
-
     if cmd_name == "cd":
         target = arg_str if arg_str else "~"
         if target in ["", "~"]:
@@ -526,7 +521,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 node = fs[file_path]
                 if node["type"] == "file":
                     output = node["content"]
-                    # Si un honeytoken est accédé, déclencher une alerte
                     if file_path in HONEY_TOKEN_FILES:
                         trigger_alert(-1, f"Honeytoken accessed: {file_path}", client_ip, username)
                 else:
@@ -629,6 +623,31 @@ def process_command(cmd, current_dir, username, fs, client_ip):
         output = ("Vulnerable web server detected on port 80.\n"
                   "Default admin credentials: admin:admin123\n"
                   "Exploitable vulnerability: Remote Code Execution possible (CVE-XXXX-YYYY).\n")
+    #=====================================
+    # Simulation de services réseau
+    #=====================================
+    elif cmd_name == "ftp":
+        output = ("Connected to FTP server at 192.168.1.200\n"
+                  "Default credentials: username='ftp', password='ftp123'\n"
+                  "FTP server welcome message: 220 Welcome to the Fake FTP Server\n")
+    elif cmd_name == "smb":
+        output = ("Connected to SMB share \\\\192.168.1.201\\public\n"
+                  "Default credentials: username='guest', password='guest'\n"
+                  "SMB service: Windows SMB v1.0 detected (insecure)\n")
+    elif cmd_name == "db":
+        output = ("Connected to MySQL server at 127.0.0.1:3306\n"
+                  "Default credentials: username='root', password='root'\n"
+                  "MySQL version: 5.7.30 (Fake)\n")
+    elif cmd_name == "netlog":
+        logs = []
+        for i in range(3):
+            time_stamp = datetime.now().strftime("%b %d %H:%M:%S")
+            src_ip = f"192.168.1.{random.randint(2,254)}"
+            dst_ip = f"192.168.1.{random.randint(2,254)}"
+            port = random.choice([21, 22, 80, 443, 445, 3306])
+            state = random.choice(["ESTABLISHED", "CLOSE_WAIT", "TIME_WAIT"])
+            logs.append(f"{time_stamp} {src_ip}:{random.randint(1000,65000)} -> {dst_ip}:{port} {state}")
+        output = "\r\n".join(logs) + "\r\n"
     # -------------------------------------
     elif cmd_name == "history":
         output = "\r\n".join(load_history(username))
@@ -838,7 +857,7 @@ def handle_connection(client_socket, client_addr):
         if session_user in PREDEFINED_USERS:
             current_dir = PREDEFINED_USERS[session_user]["home"]
         else:
-            current_dir = "/root" if session_user == "root" else f"/home/{session_user}"
+            current_dir = "/root" if session_user=="root" else f"/home/{session_user}"
         session_log.write(f"{datetime.now().isoformat()} - Session started for user: {session_user}\n")
         while True:
             prompt = f"{session_user}@debian:{current_dir}$ "
@@ -885,18 +904,14 @@ def create_file_structure_archive():
     ]
     for d in directories:
         os.makedirs(d, exist_ok=True)
-    #======================================
     # Fichier avec fausses connexions
-    #======================================
     passwords_path = os.path.join(base_dir, "home", "admin", "passwords.txt")
     with open(passwords_path, "w") as f:
         for i in range(60):
             fake_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             fake_ip = f"192.168.1.{random.randint(2,254)}"
             f.write(f"{fake_time} - Failed login for user admin from {fake_ip}\n")
-    #======================================
     # Historique factice des commandes
-    #======================================
     bash_history_path = os.path.join(base_dir, "home", "admin", ".bash_history")
     with open(bash_history_path, "w") as f:
         fake_commands = [
@@ -906,9 +921,7 @@ def create_file_structure_archive():
         ]
         for _ in range(60):
             f.write(random.choice(fake_commands) + "\n")
-    #======================================
     # Fichiers appât / Honeytokens
-    #======================================
     confidential_notes_path = os.path.join(base_dir, "home", "admin", "confidential-notes.txt")
     with open(confidential_notes_path, "w") as f:
         f.write("Top Secret:\nNe divulguez sous aucun prétexte les informations suivantes...\nDétails sensibles ici.\n")
@@ -920,9 +933,7 @@ def create_file_structure_archive():
             "ChallengeResponseAuthentication no\nUsePAM yes\nX11Forwarding yes\n"
             "PrintMotd no\nAcceptEnv LANG LC_*\nSubsystem sftp /usr/lib/openssh/sftp-server\n"
         )
-    #======================================
     # Honeytokens supplémentaires
-    #======================================
     fin_report_path = os.path.join(base_dir, "home", "admin", "financial_report.pdf")
     with open(fin_report_path, "w") as f:
         f.write("CONFIDENTIAL FINANCIAL REPORT\nMarker: FIN-REPORT-XYZ\nDo not distribute.")
@@ -932,9 +943,7 @@ def create_file_structure_archive():
     secret_plans_path = os.path.join(base_dir, "home", "admin", "secret_plans.txt")
     with open(secret_plans_path, "w") as f:
         f.write("Top Secret Plans\nMarker: SECRET-PLANS-123\nInternal use only.")
-    #======================================
     # Autres fichiers statiques
-    #======================================
     db_config_path = os.path.join(base_dir, "etc", "db_config.ini")
     with open(db_config_path, "w") as f:
         f.write(
