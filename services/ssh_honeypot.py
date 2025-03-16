@@ -39,7 +39,7 @@ if not os.path.exists(SESSION_LOG_DIR):
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_USER = "honeycute896@gmail.com"
-SMTP_PASS = "mgps uhqr ujux pbbf"
+SMTP_PASS = "gxtb izuj tlak lcxq"  # Mot de passe d’application
 ALERT_FROM = SMTP_USER
 ALERT_TO = "admin@example.com"
 
@@ -167,7 +167,6 @@ def populate_predefined_users(fs):
             fs[f"{home_dir}/{filename}"] = {"type": "file", "content": content}
     return fs
 
-# Définition de la base du système de fichiers
 BASE_FILE_SYSTEM = {
     "/": {"type": "dir", "contents": ["bin", "sbin", "usr", "var", "opt", "root", "home", "etc", "tmp", "secret"]},
     "/bin": {"type": "dir", "contents": ["bash", "ls", "cat", "grep"]},
@@ -185,7 +184,6 @@ BASE_FILE_SYSTEM = {
     "/secret": {"type": "dir", "contents": ["critical_data.txt"]}
 }
 
-# Fichiers statiques
 BASE_FILE_SYSTEM["/root/credentials.txt"] = {"type": "file", "content": "username=admin\npassword=admin123\napi_key=ABCD-1234-EFGH-5678"}
 BASE_FILE_SYSTEM["/root/config_backup.zip"] = {"type": "file", "content": "PK\x03\x04...<binary zip content>..."}
 BASE_FILE_SYSTEM["/root/ssh_keys.tar.gz"] = {"type": "file", "content": "...\x1F\x8B\x08...<binary tar.gz content>..."}
@@ -199,7 +197,7 @@ BASE_FILE_SYSTEM["/secret/critical_data.txt"] = {"type": "file", "content": "CRI
 BASE_FILE_SYSTEM = populate_predefined_users(BASE_FILE_SYSTEM)
 
 # ================================
-# Alerte (DB + mail)
+# Alerte (DB + mail) avec infos détaillées [MOD]
 # ================================
 def trigger_alert(session_id, command, client_ip, username):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -216,8 +214,17 @@ def trigger_alert(session_id, command, client_ip, username):
     except Exception as e:
         print(f"[!] Erreur lors de l'enregistrement de l'alerte en DB: {e}")
 
-    subject = f"[HONEYPOT] Alerte : {client_ip}"
-    body = f"{timestamp} - {client_ip} a exécuté une commande suspecte : {command}\nUser: {username}"
+    subject = f"[HONEYPOT] Alerte: {client_ip} (user={username})"
+    body = (
+        f"Date/Heure   : {timestamp}\n"
+        f"IP attaquant : {client_ip}\n"
+        f"Utilisateur  : {username}\n"
+        f"Commande     : {command}\n"
+        f"Session ID   : {session_id}\n"
+        "\nDétails supplémentaires :\n"
+        "- Honeypot SSH de test\n"
+        "- Surveillance active\n"
+    )
     msg = MIMEText(body)
     msg["From"] = SMTP_USER
     msg["To"] = ALERT_TO
@@ -227,6 +234,7 @@ def trigger_alert(session_id, command, client_ip, username):
             smtp.starttls()
             smtp.login(SMTP_USER, SMTP_PASS)
             smtp.send_message(msg)
+            print("[*] Rapport d'alerte envoyé par email.")
     except Exception as e:
         print(f"[!] Erreur lors de l'envoi du mail d'alerte: {e}")
 
@@ -472,7 +480,7 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
     return "".join(line_buffer)
 
 # ================================
-# Traitement des commandes
+# Traitement des commandes avec alertes supplémentaires [MOD]
 # ================================
 def process_command(cmd, current_dir, username, fs, client_ip):
     output = ""
@@ -693,21 +701,14 @@ def process_command(cmd, current_dir, username, fs, client_ip):
         else:
             output = (f"[sudo] password for {username}: \n"
                       "Sorry, try again.\nSorry, try again.\nSorry, try again.\nsudo: 3 incorrect password attempts\n")
+    # [MOD] Nouveau cas : "su" ou "su-"
     elif cmd_name in ["su", "su-"]:
-        if username=="root":
+        if username == "root":
             output = ""
         else:
             output = "Password: \nsu: Authentication failure\n"
-    elif cmd_name == "apt-get":
-        output = "E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)"
-    elif cmd_name == "dpkg":
-        output = "dpkg: error: must be root to perform this command"
-    elif cmd_name == "make":
-        output = "make: Nothing to be done for 'all'."
-    elif cmd_name in ["scp", "sftp"]:
-        with open(FILE_TRANSFER_LOG, "a") as f:
-            f.write(f"{datetime.now()} - {username} from {client_ip} attempted file transfer: {arg_str}\n")
-        output = f"bash: {cmd_name}: command not found"
+        trigger_alert(-1, f"Attacker used SU command => {cmd_name} {arg_str}", client_ip, username)
+    # [MOD] Nouveau cas : "wget" ou "curl"
     elif cmd_name in ["wget", "curl"]:
         if "http" in arg_str:
             output = "Downloading large file... (simulation)\n"
@@ -719,7 +720,16 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 f.write(f"{datetime.now()} - {username} from {client_ip} attempted download: {cmd_name}\n")
         else:
             output = f"bash: {cmd_name}: command not found"
-    elif cmd_name in ["ftp", "tftp"]:
+        trigger_alert(-1, f"Download attempt => {cmd_name} {arg_str}", client_ip, username)
+    elif cmd_name in ["apt-get"]:
+        output = "E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)"
+    elif cmd_name in ["dpkg"]:
+        output = "dpkg: error: must be root to perform this command"
+    elif cmd_name in ["make"]:
+        output = "make: Nothing to be done for 'all'."
+    elif cmd_name in ["scp", "sftp"]:
+        with open(FILE_TRANSFER_LOG, "a") as f:
+            f.write(f"{datetime.now()} - {username} from {client_ip} attempted file transfer: {arg_str}\n")
         output = f"bash: {cmd_name}: command not found"
     elif cmd_name in ["chmod", "bash", "sh", "netcat", "nc", "python"]:
         output = ""
@@ -1076,7 +1086,6 @@ def create_file_structure():
             "INSERT INTO users (id, username, password) VALUES (22, 'user20', 'password20');\n"
         )
 
-    # Ici, nous ne créons plus d'archive et nous ne supprimons pas le dossier
     print(f"Structure de fichiers créée dans le dossier '{base_dir}'.")
 
 # ======================================
@@ -1084,10 +1093,7 @@ def create_file_structure():
 # ======================================
 if __name__ == "__main__":
     init_database()
-    # Création de l'arborescence et des fichiers leurres (sans archive)
     create_file_structure()
-
-    # Démarrage du thread de rapport hebdomadaire
     report_thread = threading.Thread(target=weekly_report_thread, daemon=True)
     report_thread.start()
 
