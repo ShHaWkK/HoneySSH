@@ -39,7 +39,7 @@ if not os.path.exists(SESSION_LOG_DIR):
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_USER = "honeycute896@gmail.com"
-SMTP_PASS = "gxtb izuj tlak lcxq"  # Mot de passe d’application
+SMTP_PASS = "yvug acgb tpre gjgp"  # Mot de passe d’application
 ALERT_FROM = SMTP_USER
 ALERT_TO = "admin@example.com"
 
