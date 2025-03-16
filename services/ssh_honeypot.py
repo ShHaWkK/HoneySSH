@@ -38,10 +38,10 @@ if not os.path.exists(SESSION_LOG_DIR):
 # =======================
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
-SMTP_USER = "honeycute896@gmail.com"    # Votre adresse Gmail
-SMTP_PASS = "mgps uhqr ujux pbbf"       # Mot de passe d'application
+SMTP_USER = "honeycute896@gmail.com"
+SMTP_PASS = "mgps uhqr ujux pbbf"
 ALERT_FROM = SMTP_USER
-ALERT_TO = "admin@example.com"          # Adresse destinataire
+ALERT_TO = "admin@example.com"
 
 # ================================
 # Comptes utilisateurs préconfigurés
@@ -83,20 +83,12 @@ FILE_TRANSFER_LOG = "file_transfers.log"
 HONEY_TOKEN_FILES = [
     "/home/admin/financial_report.pdf",
     "/home/admin/compromised_email.eml",
-    "/home/admin/secret_plans.txt"
+    "/home/admin/secret_plans.txt",
+    "/secret/critical_data.txt"
 ]
 
 # ================================
-# Simulated outputs for system commands
-# ================================
-FAKE_NETSTAT_OUTPUT = """Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
-tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      135/sshd
-tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      220/apache2
-tcp        0      0 127.0.0.1:3306          0.0.0.0:*               LISTEN      212/mysqld
-udp        0      0 0.0.0.0:68              0.0.0.0:*                           500/dhclient"""
-
-# ================================
-# Fonctions dynamiques (df, uptime, ps, config)
+# Fonctions dynamiques (df, uptime, ps, config, netstat)
 # ================================
 def get_dynamic_df():
     sizes = {"sda1": "50G", "tmpfs": "100M"}
@@ -121,7 +113,7 @@ def get_dynamic_uptime():
 def get_dynamic_ps():
     lines = []
     lines.append("USER       PID %CPU %MEM    VSZ   RSS TTY   STAT START   TIME COMMAND")
-    # Génération de 6 processus standards
+    # Processus standards
     for i in range(6):
         user = random.choice(["root", "admin", "devops", "dbadmin"])
         pid = random.randint(1, 5000)
@@ -135,9 +127,30 @@ def get_dynamic_ps():
         time_str = f"{random.randint(0,2)}:{random.randint(0,59):02d}"
         command = random.choice(["/sbin/init", "/usr/sbin/sshd -D", "/usr/bin/python", "/usr/bin/nginx"])
         lines.append(f"{user:<10}{pid:<5}{cpu:<5}{mem:<5}{vsz:<7}{rss:<5}{tty:<7}{stat:<5}{start:<8}{time_str:<6}{command}")
-    # Ajout aléatoire d'un processus suspect
+    # Processus suspects ou anormaux
+    if random.random() < 0.5:
+        lines.append("malware   9999 99.9 50.0 999999 99999 ?        R    Oct01  99:99 /usr/bin/malicious_script")
     if random.random() < 0.3:
-        lines.append("suspicious  9999 99.9 50.0 999999 99999 ?        Z    Oct01  99:99 /usr/bin/malware")
+        lines.append("overload  8888 90.0 40.0 800000 80000 ?        S    Oct01  80:00 /usr/bin/resource_hog")
+    return "\r\n".join(lines)
+
+def get_dynamic_netstat():
+    # Simuler des connexions réseau récentes et variées
+    lines = []
+    now = datetime.now().strftime("%b %d %H:%M:%S")
+    # Connexions basiques
+    lines.append("Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name")
+    lines.append(f"tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      135/sshd")
+    lines.append(f"tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      220/apache2")
+    # Ajout dynamique de connexions récentes
+    for i in range(random.randint(2,4)):
+        local_ip = f"192.168.1.{random.randint(2,254)}"
+        local_port = random.choice([22, 80, 443, 3306])
+        foreign_ip = f"10.0.0.{random.randint(2,254)}"
+        foreign_port = random.randint(1024,65535)
+        state = random.choice(["ESTABLISHED", "TIME_WAIT", "CLOSE_WAIT"])
+        pid_prog = f"{random.randint(100,999)}/app{i}"
+        lines.append(f"tcp        0      0 {local_ip}:{local_port}  {foreign_ip}:{foreign_port}  {state:<10} {pid_prog}")
     return "\r\n".join(lines)
 
 def get_dynamic_config():
@@ -164,7 +177,7 @@ def populate_predefined_users(fs):
 # Système de fichiers enrichi
 # ================================
 BASE_FILE_SYSTEM = {
-    "/": {"type": "dir", "contents": ["bin", "sbin", "usr", "var", "opt", "root", "home", "etc", "tmp"]},
+    "/": {"type": "dir", "contents": ["bin", "sbin", "usr", "var", "opt", "root", "home", "etc", "tmp", "secret"]},
     "/bin": {"type": "dir", "contents": ["bash", "ls", "cat", "grep"]},
     "/sbin": {"type": "dir", "contents": ["init", "sshd"]},
     "/usr": {"type": "dir", "contents": ["bin", "lib", "share"]},
@@ -176,9 +189,11 @@ BASE_FILE_SYSTEM = {
     "/opt": {"type": "dir", "contents": []},
     "/root": {"type": "dir", "contents": ["credentials.txt", "config_backup.zip", "ssh_keys.tar.gz", "rootkit_detector.sh"]},
     "/etc": {"type": "dir", "contents": ["passwd", "shadow", "apt", "service", "hosts", "myconfig.conf"]},
-    "/tmp": {"type": "dir", "contents": []}
+    "/tmp": {"type": "dir", "contents": []},
+    "/secret": {"type": "dir", "contents": ["critical_data.txt"]}
 }
 
+# Fichiers statiques
 BASE_FILE_SYSTEM["/root/credentials.txt"] = {"type": "file", "content": "username=admin\npassword=admin123\napi_key=ABCD-1234-EFGH-5678"}
 BASE_FILE_SYSTEM["/root/config_backup.zip"] = {"type": "file", "content": "PK\x03\x04...<binary zip content>..."}
 BASE_FILE_SYSTEM["/root/ssh_keys.tar.gz"] = {"type": "file", "content": "...\x1F\x8B\x08...<binary tar.gz content>..."}
@@ -187,6 +202,7 @@ BASE_FILE_SYSTEM["/etc/passwd"] = {"type": "file", "content": "root:x:0:0:root:/
 BASE_FILE_SYSTEM["/etc/shadow"] = {"type": "file", "content": "root:*:18967:0:99999:7:::\nuser:*:18967:0:99999:7:::"}
 BASE_FILE_SYSTEM["/etc/hosts"] = {"type": "file", "content": "127.0.0.1 localhost\n192.168.1.100 honeypot.local"}
 BASE_FILE_SYSTEM["/etc/myconfig.conf"] = {"type": "file", "content": get_dynamic_config()}
+BASE_FILE_SYSTEM["/secret/critical_data.txt"] = {"type": "file", "content": "CRITICAL DATA: Marker: CRITICAL-DATA-999\nDo not share."}
 
 BASE_FILE_SYSTEM = populate_predefined_users(BASE_FILE_SYSTEM)
 
@@ -521,6 +537,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 node = fs[file_path]
                 if node["type"] == "file":
                     output = node["content"]
+                    # Déclenchement d'alerte si un honeytoken est accédé
                     if file_path in HONEY_TOKEN_FILES:
                         trigger_alert(-1, f"Honeytoken accessed: {file_path}", client_ip, username)
                 else:
@@ -556,7 +573,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
     elif cmd_name == "ps":
         output = get_dynamic_ps()
     elif cmd_name == "netstat":
-        output = FAKE_NETSTAT_OUTPUT
+        output = get_dynamic_netstat()
     elif cmd_name == "uptime":
         output = get_dynamic_uptime()
     elif cmd_name == "df":
@@ -623,17 +640,15 @@ def process_command(cmd, current_dir, username, fs, client_ip):
         output = ("Vulnerable web server detected on port 80.\n"
                   "Default admin credentials: admin:admin123\n"
                   "Exploitable vulnerability: Remote Code Execution possible (CVE-XXXX-YYYY).\n")
-    #=====================================
-    # Simulation de services réseau
-    #=====================================
+    # --- Simulation de services réseau ---
     elif cmd_name == "ftp":
         output = ("Connected to FTP server at 192.168.1.200\n"
                   "Default credentials: username='ftp', password='ftp123'\n"
-                  "FTP server welcome message: 220 Welcome to the Fake FTP Server\n")
+                  "FTP welcome: 220 Welcome to the Fake FTP Server\n")
     elif cmd_name == "smb":
         output = ("Connected to SMB share \\\\192.168.1.201\\public\n"
                   "Default credentials: username='guest', password='guest'\n"
-                  "SMB service: Windows SMB v1.0 detected (insecure)\n")
+                  "SMB: Windows SMB v1.0 (insecure) detected\n")
     elif cmd_name == "db":
         output = ("Connected to MySQL server at 127.0.0.1:3306\n"
                   "Default credentials: username='root', password='root'\n"
@@ -648,7 +663,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             state = random.choice(["ESTABLISHED", "CLOSE_WAIT", "TIME_WAIT"])
             logs.append(f"{time_stamp} {src_ip}:{random.randint(1000,65000)} -> {dst_ip}:{port} {state}")
         output = "\r\n".join(logs) + "\r\n"
-    # -------------------------------------
     elif cmd_name == "history":
         output = "\r\n".join(load_history(username))
     elif cmd_name == "sudo":
@@ -901,6 +915,7 @@ def create_file_structure_archive():
         os.path.join(base_dir, "var", "www"),
         os.path.join(base_dir, "scripts"),
         os.path.join(base_dir, "logs"),
+        os.path.join(base_dir, "secret")
     ]
     for d in directories:
         os.makedirs(d, exist_ok=True)
@@ -932,6 +947,10 @@ def create_file_structure_archive():
             "Port 22\nPermitRootLogin no\nPasswordAuthentication yes\n"
             "ChallengeResponseAuthentication no\nUsePAM yes\nX11Forwarding yes\n"
             "PrintMotd no\nAcceptEnv LANG LC_*\nSubsystem sftp /usr/lib/openssh/sftp-server\n"
+            "AllowTcpForwarding yes\nGatewayPorts no\nClientAliveInterval 120\n"
+            "ClientAliveCountMax 3\nLoginGraceTime 2m\nMaxAuthTries 6\n"
+            "MaxSessions 10\nPermitTunnel no\nAllowAgentForwarding yes\n"
+            "PermitUserEnvironment no\n"
         )
     # Honeytokens supplémentaires
     fin_report_path = os.path.join(base_dir, "home", "admin", "financial_report.pdf")
@@ -943,6 +962,14 @@ def create_file_structure_archive():
     secret_plans_path = os.path.join(base_dir, "home", "admin", "secret_plans.txt")
     with open(secret_plans_path, "w") as f:
         f.write("Top Secret Plans\nMarker: SECRET-PLANS-123\nInternal use only.")
+    # Faux répertoire interne pour liens décoys
+    critical_data_path = os.path.join(base_dir, "secret", "critical_data.txt")
+    with open(critical_data_path, "w") as f:
+        f.write("CRITICAL INTERNAL DATA\nMarker: CRITICAL-DATA-999\nRestricted access.\n"
+            "Confidential information about project X.\n"
+            "Do not share this document with unauthorized personnel.\n"
+            "Contact security@example.com for more details.\n"
+            "Backup location: /backup/critical_data_backup.tar.gz\n")
     # Autres fichiers statiques
     db_config_path = os.path.join(base_dir, "etc", "db_config.ini")
     with open(db_config_path, "w") as f:
