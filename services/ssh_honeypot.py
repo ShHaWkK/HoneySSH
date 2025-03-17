@@ -197,6 +197,52 @@ BASE_FILE_SYSTEM["/secret/critical_data.txt"] = {"type": "file", "content": "CRI
 BASE_FILE_SYSTEM = populate_predefined_users(BASE_FILE_SYSTEM)
 
 # ================================
+# Commandes supplémentaires : touch, mkdir, write
+# ================================
+def command_touch(arg_str, current_dir, fs):
+    if not arg_str:
+        return "touch: missing file operand", current_dir
+    file_path = (current_dir.rstrip("/") + "/" + arg_str) if not arg_str.startswith("/") else arg_str
+    file_path = file_path.rstrip("/") if len(file_path) > 1 and file_path.endswith("/") else file_path
+    if file_path in fs:
+        return "", current_dir  # le fichier existe déjà
+    fs[file_path] = {"type": "file", "content": ""}
+    parent_dir = file_path.rsplit("/", 1)[0] or "/"
+    file_name = file_path.split("/")[-1]
+    if parent_dir in fs and "contents" in fs[parent_dir]:
+        fs[parent_dir]["contents"].append(file_name)
+    return "", current_dir
+
+def command_mkdir(arg_str, current_dir, fs):
+    if not arg_str:
+        return "mkdir: missing operand", current_dir
+    dir_path = (current_dir.rstrip("/") + "/" + arg_str) if not arg_str.startswith("/") else arg_str
+    dir_path = dir_path.rstrip("/") if len(dir_path) > 1 and dir_path.endswith("/") else dir_path
+    if dir_path in fs:
+        return f"mkdir: cannot create directory '{arg_str}': File exists", current_dir
+    fs[dir_path] = {"type": "dir", "contents": []}
+    parent_dir = dir_path.rsplit("/", 1)[0] or "/"
+    dir_name = dir_path.split("/")[-1]
+    if parent_dir in fs and "contents" in fs[parent_dir]:
+        fs[parent_dir]["contents"].append(dir_name)
+    return "", current_dir
+
+def command_write(arg_str, current_dir, fs):
+    if not arg_str:
+        return "write: missing operand", current_dir
+    parts = arg_str.split(maxsplit=1)
+    if len(parts) < 2:
+        return "write: missing text to write", current_dir
+    filename, text = parts[0], parts[1]
+    file_path = (current_dir.rstrip("/") + "/" + filename) if not filename.startswith("/") else filename
+    file_path = file_path.rstrip("/") if len(file_path) > 1 and file_path.endswith("/") else file_path
+    if file_path in fs and fs[file_path]["type"] == "file":
+        fs[file_path]["content"] = text
+        return "", current_dir
+    else:
+        return f"write: cannot write to '{filename}': Not a file", current_dir
+
+# ================================
 # Alerte (DB + mail) avec infos détaillées [MOD]
 # ================================
 def trigger_alert(session_id, command, client_ip, username):
@@ -263,7 +309,7 @@ def get_completions(current_input, current_dir, username, fs):
         "ps", "netstat", "uptime", "df", "exit", "logout", "find", "grep",
         "head", "tail", "history", "sudo", "su", "apt-get", "dpkg", "make",
         "last", "who", "w", "scp", "sftp", "vulndb", "oldconfig", "vulnweb",
-        "ftp", "smb", "db", "netlog"
+        "ftp", "smb", "db", "netlog", "touch", "mkdir", "write"
     ]
     if " " not in current_input:
         return sorted([cmd for cmd in base_cmds if cmd.startswith(current_input)])
@@ -407,13 +453,16 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
         last_key_time = current_time
         advanced_keylog(session_log, char, delay)
 
+        # Gestion de la touche Entrée
         if char in ("\r", "\n"):
             chan.send(b"\r\n")
             session_log.write("\n")
             break
+        # Gestion de Ctrl+C
         if char == "\x03":
             chan.send(b"^C\r\n")
             return ""
+        # Gestion des touches de suppression
         if char in ("\x7f", "\x08"):
             if cursor_pos > 0:
                 cursor_pos -= 1
@@ -421,15 +470,28 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
                 redraw_line()
             last_was_tab = False
             continue
+        # Gestion des séquences d'échappement (flèches)
         if char == "\x1b":
-            seq = byte + chan.recv(2)
-            if seq.endswith(b"[A"):
+            seq = byte
+            # Lire les bytes supplémentaires de la séquence d'échappement
+            while True:
+                next_byte = chan.recv(1)
+                if not next_byte:
+                    break
+                seq += next_byte
+                try:
+                    ch = next_byte.decode("utf-8", errors="ignore")
+                except Exception:
+                    ch = ''
+                if ch.isalpha():
+                    break
+            if seq.endswith(b"A"):  # Flèche haut
                 if history_index > 0:
                     history_index -= 1
                     line_buffer = list(history[history_index])
                     cursor_pos = len(line_buffer)
                     redraw_line()
-            elif seq.endswith(b"[B"):
+            elif seq.endswith(b"B"):  # Flèche bas
                 if history_index < len(history) - 1:
                     history_index += 1
                     line_buffer = list(history[history_index])
@@ -438,16 +500,17 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
                     line_buffer = []
                 cursor_pos = len(line_buffer)
                 redraw_line()
-            elif seq.endswith(b"[C"):
+            elif seq.endswith(b"C"):  # Flèche droite
                 if cursor_pos < len(line_buffer):
                     cursor_pos += 1
                     redraw_line()
-            elif seq.endswith(b"[D"):
+            elif seq.endswith(b"D"):  # Flèche gauche
                 if cursor_pos > 0:
                     cursor_pos -= 1
                     redraw_line()
             last_was_tab = False
             continue
+        # Gestion de la tabulation pour autocomplétion
         if char == "\t":
             if last_was_tab:
                 completions = get_completions("".join(line_buffer), current_dir, username, fs)
@@ -472,6 +535,7 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
                 last_was_tab = True
                 continue
 
+        # Ajout du caractère dans le buffer
         line_buffer.insert(cursor_pos, char)
         cursor_pos += 1
         redraw_line()
@@ -511,7 +575,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 new_dir = target_path
             else:
                 output = f"bash: cd: {target}: No such file or directory"
-
     elif cmd_name == "ls":
         target_path = current_dir
         if arg_str and not arg_str.startswith("-"):
@@ -523,25 +586,19 @@ def process_command(cmd, current_dir, username, fs, client_ip):
         if not output:
             contents = fs[target_path]["contents"] if target_path in fs and fs[target_path]["type"]=="dir" else []
             output = "\r\n".join(contents)
-
     elif cmd_name == "pwd":
         output = current_dir
-
     elif cmd_name == "whoami":
         output = username
-
     elif cmd_name == "id":
         if username=="root":
             output = "uid=0(root) gid=0(root) groups=0(root)"
         else:
             output = f"uid=1000({username}) gid=1000({username}) groups=1000({username}),27(sudo)"
-
     elif cmd_name == "uname":
         output = "Linux debian 4.19.0-18-amd64 #1 SMP Debian 4.19.208-1 (Debian)" if arg_str else "Linux"
-
     elif cmd_name == "echo":
         output = arg_str
-
     elif cmd_name == "cat":
         if not arg_str:
             output = ""
@@ -561,7 +618,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                     output = f"cat: {arg_str}: Is a directory"
             else:
                 output = f"cat: {arg_str}: No such file or directory"
-
     elif cmd_name == "rm":
         if not arg_str:
             output = "rm: missing operand"
@@ -588,19 +644,14 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                     output = f"rm: cannot remove '{arg_str}': Is a directory"
             else:
                 output = f"rm: cannot remove '{arg_str}': No such file or directory"
-
     elif cmd_name == "ps":
         output = get_dynamic_ps()
-
     elif cmd_name == "netstat":
         output = get_dynamic_netstat()
-
     elif cmd_name == "uptime":
         output = get_dynamic_uptime()
-
     elif cmd_name == "df":
         output = get_dynamic_df()
-
     elif cmd_name == "find":
         args = arg_str.split()
         if not args:
@@ -610,7 +661,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             pattern = args[1] if len(args) > 1 else ""
             results = [path for path in fs.keys() if path.startswith(directory) and (pattern=="" or pattern in path)]
             output = "\r\n".join(results)
-
     elif cmd_name == "grep":
         args = arg_str.split()
         if len(args) < 2:
@@ -625,7 +675,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 output = "\r\n".join(matching)
             else:
                 output = f"grep: {filename}: No such file or directory"
-
     elif cmd_name == "head":
         args = arg_str.split()
         if not args:
@@ -638,7 +687,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 output = "\r\n".join(lines[:10])
             else:
                 output = f"head: cannot open '{filename}' for reading: No such file or directory"
-
     elif cmd_name == "tail":
         args = arg_str.split()
         if not args:
@@ -651,7 +699,13 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 output = "\r\n".join(lines[-10:])
             else:
                 output = f"tail: cannot open '{filename}' for reading: No such file or directory"
-
+    # Commandes pour modifier le système de fichiers
+    elif cmd_name == "touch":
+        output, new_dir = command_touch(arg_str, current_dir, fs)
+    elif cmd_name == "mkdir":
+        output, new_dir = command_mkdir(arg_str, current_dir, fs)
+    elif cmd_name == "write":
+        output, new_dir = command_write(arg_str, current_dir, fs)
     # Simulation de vulnérabilités
     elif cmd_name == "vulndb":
         output = ("Connecting to vulnerable database service...\n"
@@ -701,14 +755,12 @@ def process_command(cmd, current_dir, username, fs, client_ip):
         else:
             output = (f"[sudo] password for {username}: \n"
                       "Sorry, try again.\nSorry, try again.\nSorry, try again.\nsudo: 3 incorrect password attempts\n")
-    # [MOD] Nouveau cas : "su" ou "su-"
     elif cmd_name in ["su", "su-"]:
         if username == "root":
             output = ""
         else:
             output = "Password: \nsu: Authentication failure\n"
         trigger_alert(-1, f"Attacker used SU command => {cmd_name} {arg_str}", client_ip, username)
-    # [MOD] Nouveau cas : "wget" ou "curl"
     elif cmd_name in ["wget", "curl"]:
         if "http" in arg_str:
             output = "Downloading large file... (simulation)\n"
@@ -721,11 +773,11 @@ def process_command(cmd, current_dir, username, fs, client_ip):
         else:
             output = f"bash: {cmd_name}: command not found"
         trigger_alert(-1, f"Download attempt => {cmd_name} {arg_str}", client_ip, username)
-    elif cmd_name in ["apt-get"]:
+    elif cmd_name == "apt-get":
         output = "E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)"
-    elif cmd_name in ["dpkg"]:
+    elif cmd_name == "dpkg":
         output = "dpkg: error: must be root to perform this command"
-    elif cmd_name in ["make"]:
+    elif cmd_name == "make":
         output = "make: Nothing to be done for 'all'."
     elif cmd_name in ["scp", "sftp"]:
         with open(FILE_TRANSFER_LOG, "a") as f:
