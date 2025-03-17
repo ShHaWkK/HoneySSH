@@ -10,8 +10,6 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from fpdf import FPDF
-# import tarfile
-# import shutil
 
 # =======================
 # Configuration Variables
@@ -19,6 +17,7 @@ from fpdf import FPDF
 HOST = ""  # écoute sur toutes interfaces
 PORT = 2224
 SSH_BANNER = "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.1"
+
 ENABLE_REDIRECTION = False
 REAL_SSH_HOST = "192.168.1.100"
 REAL_SSH_PORT = 22
@@ -30,18 +29,17 @@ _brute_force_lock = threading.Lock()
 
 # Répertoire pour stocker les logs de session avancés
 SESSION_LOG_DIR = "session_logs"
-if not os.path.exists(SESSION_LOG_DIR):
-    os.makedirs(SESSION_LOG_DIR)
+os.makedirs(SESSION_LOG_DIR, exist_ok=True)
 
 # =======================
 # SMTP configuration (Gmail)
 # =======================
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
-SMTP_USER = "honeycute896@gmail.com"
-SMTP_PASS = "yvug acgb tpre gjgp"  # Mot de passe d’application
+SMTP_USER = "honeycute896@gmail.com"         # Remplacez par votre adresse email
+SMTP_PASS = "yvug acgb tpre gjgp"              # Remplacez par votre mot de passe d'application
 ALERT_FROM = SMTP_USER
-ALERT_TO = "admin@example.com"
+ALERT_TO = "admin@example.com"                # Adresse destinataire des alertes
 
 # ================================
 # Comptes utilisateurs préconfigurés
@@ -153,7 +151,7 @@ def get_dynamic_config():
     return f"max_connections={max_conn}\nlog_level={log_level}\n"
 
 # ================================
-# Construction du système de fichiers
+# Simulation du système de fichiers (FS) factice
 # ================================
 def populate_predefined_users(fs):
     if "/home" not in fs:
@@ -205,11 +203,11 @@ def command_touch(arg_str, current_dir, fs):
     file_path = (current_dir.rstrip("/") + "/" + arg_str) if not arg_str.startswith("/") else arg_str
     file_path = file_path.rstrip("/") if len(file_path) > 1 and file_path.endswith("/") else file_path
     if file_path in fs:
-        return "", current_dir  # le fichier existe déjà
+        return "", current_dir  # Fichier existant
     fs[file_path] = {"type": "file", "content": ""}
     parent_dir = file_path.rsplit("/", 1)[0] or "/"
     file_name = file_path.split("/")[-1]
-    if parent_dir in fs and "contents" in fs[parent_dir]:
+    if parent_dir in fs and fs[parent_dir]["type"] == "dir" and "contents" in fs[parent_dir]:
         fs[parent_dir]["contents"].append(file_name)
     return "", current_dir
 
@@ -223,16 +221,17 @@ def command_mkdir(arg_str, current_dir, fs):
     fs[dir_path] = {"type": "dir", "contents": []}
     parent_dir = dir_path.rsplit("/", 1)[0] or "/"
     dir_name = dir_path.split("/")[-1]
-    if parent_dir in fs and "contents" in fs[parent_dir]:
+    if parent_dir in fs and fs[parent_dir]["type"] == "dir" and "contents" in fs[parent_dir]:
         fs[parent_dir]["contents"].append(dir_name)
     return "", current_dir
 
 def command_write(arg_str, current_dir, fs):
+    # Usage: write <filename> "texte à écrire"
     if not arg_str:
         return "write: missing operand", current_dir
     parts = arg_str.split(maxsplit=1)
     if len(parts) < 2:
-        return "write: missing text to write", current_dir
+        return "write: missing text to write (use: write <file> \"your text\")", current_dir
     filename, text = parts[0], parts[1]
     file_path = (current_dir.rstrip("/") + "/" + filename) if not filename.startswith("/") else filename
     file_path = file_path.rstrip("/") if len(file_path) > 1 and file_path.endswith("/") else file_path
@@ -240,10 +239,10 @@ def command_write(arg_str, current_dir, fs):
         fs[file_path]["content"] = text
         return "", current_dir
     else:
-        return f"write: cannot write to '{filename}': Not a file", current_dir
+        return f"write: cannot write to '{filename}': Not a file or doesn't exist", current_dir
 
 # ================================
-# Alerte (DB + mail) avec infos détaillées [MOD]
+# Alerte (DB + email) avec infos détaillées
 # ================================
 def trigger_alert(session_id, command, client_ip, username):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -258,8 +257,7 @@ def trigger_alert(session_id, command, client_ip, username):
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"[!] Erreur lors de l'enregistrement de l'alerte en DB: {e}")
-
+        print(f"[!] Erreur DB: {e}")
     subject = f"[HONEYPOT] Alerte: {client_ip} (user={username})"
     body = (
         f"Date/Heure   : {timestamp}\n"
@@ -280,9 +278,9 @@ def trigger_alert(session_id, command, client_ip, username):
             smtp.starttls()
             smtp.login(SMTP_USER, SMTP_PASS)
             smtp.send_message(msg)
-            print("[*] Rapport d'alerte envoyé par email.")
+            print("[*] Alerte envoyée par email.")
     except Exception as e:
-        print(f"[!] Erreur lors de l'envoi du mail d'alerte: {e}")
+        print(f"[!] Erreur email: {e}")
 
 # ================================
 # Historique persistant
@@ -402,7 +400,7 @@ def generate_weekly_report():
             smtp.send_message(msg)
             print("[*] Rapport hebdomadaire envoyé par email.")
     except Exception as e:
-        print(f"[!] Erreur lors de l'envoi du rapport hebdomadaire: {e}")
+        print(f"[!] Erreur rapport email: {e}")
 
 def weekly_report_thread():
     while True:
@@ -442,27 +440,21 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
             break
         if not byte:
             break
-
         try:
             char = byte.decode("utf-8", errors="ignore")
         except Exception:
             continue
-
         current_time = time.time()
         delay = current_time - last_key_time
         last_key_time = current_time
         advanced_keylog(session_log, char, delay)
-
-        # Gestion de la touche Entrée
         if char in ("\r", "\n"):
             chan.send(b"\r\n")
             session_log.write("\n")
             break
-        # Gestion de Ctrl+C
         if char == "\x03":
             chan.send(b"^C\r\n")
             return ""
-        # Gestion des touches de suppression
         if char in ("\x7f", "\x08"):
             if cursor_pos > 0:
                 cursor_pos -= 1
@@ -470,20 +462,20 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
                 redraw_line()
             last_was_tab = False
             continue
-        # Gestion des séquences d'échappement (flèches)
         if char == "\x1b":
             seq = byte
-            # Lire les bytes supplémentaires de la séquence d'échappement
             while True:
-                next_byte = chan.recv(1)
+                try:
+                    next_byte = chan.recv(1)
+                except Exception:
+                    break
                 if not next_byte:
                     break
                 seq += next_byte
                 try:
-                    ch = next_byte.decode("utf-8", errors="ignore")
+                    if next_byte.decode("utf-8", errors="ignore").isalpha():
+                        break
                 except Exception:
-                    ch = ''
-                if ch.isalpha():
                     break
             if seq.endswith(b"A"):  # Flèche haut
                 if history_index > 0:
@@ -510,7 +502,6 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
                     redraw_line()
             last_was_tab = False
             continue
-        # Gestion de la tabulation pour autocomplétion
         if char == "\t":
             if last_was_tab:
                 completions = get_completions("".join(line_buffer), current_dir, username, fs)
@@ -534,17 +525,14 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
                     chan.send(b"\x07")
                 last_was_tab = True
                 continue
-
-        # Ajout du caractère dans le buffer
         line_buffer.insert(cursor_pos, char)
         cursor_pos += 1
         redraw_line()
         last_was_tab = False
-
     return "".join(line_buffer)
 
 # ================================
-# Traitement des commandes avec alertes supplémentaires [MOD]
+# Traitement des commandes avec alertes [MOD]
 # ================================
 def process_command(cmd, current_dir, username, fs, client_ip):
     output = ""
@@ -591,10 +579,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
     elif cmd_name == "whoami":
         output = username
     elif cmd_name == "id":
-        if username=="root":
-            output = "uid=0(root) gid=0(root) groups=0(root)"
-        else:
-            output = f"uid=1000({username}) gid=1000({username}) groups=1000({username}),27(sudo)"
+        output = "uid=0(root) gid=0(root) groups=0(root)" if username=="root" else f"uid=1000({username}) gid=1000({username}) groups=1000({username}),27(sudo)"
     elif cmd_name == "uname":
         output = "Linux debian 4.19.0-18-amd64 #1 SMP Debian 4.19.208-1 (Debian)" if arg_str else "Linux"
     elif cmd_name == "echo":
@@ -630,7 +615,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 node = fs[target_path]
                 if node["type"] == "file":
                     parent_dir = target_path.rsplit("/", 1)[0] or "/"
-                    if parent_dir=="/root" and username!="root":
+                    if parent_dir == "/root" and username != "root":
                         output = f"rm: cannot remove '{arg_str}': Permission denied"
                     else:
                         fs.pop(target_path, None)
@@ -699,14 +684,14 @@ def process_command(cmd, current_dir, username, fs, client_ip):
                 output = "\r\n".join(lines[-10:])
             else:
                 output = f"tail: cannot open '{filename}' for reading: No such file or directory"
-    # Commandes pour modifier le système de fichiers
+    # Commandes supplémentaires pour modifier le FS
     elif cmd_name == "touch":
         output, new_dir = command_touch(arg_str, current_dir, fs)
     elif cmd_name == "mkdir":
         output, new_dir = command_mkdir(arg_str, current_dir, fs)
     elif cmd_name == "write":
         output, new_dir = command_write(arg_str, current_dir, fs)
-    # Simulation de vulnérabilités
+    # Simulations de vulnérabilités
     elif cmd_name == "vulndb":
         output = ("Connecting to vulnerable database service...\n"
                   "Default credentials: username='root', password='toor'\n"
@@ -756,10 +741,7 @@ def process_command(cmd, current_dir, username, fs, client_ip):
             output = (f"[sudo] password for {username}: \n"
                       "Sorry, try again.\nSorry, try again.\nSorry, try again.\nsudo: 3 incorrect password attempts\n")
     elif cmd_name in ["su", "su-"]:
-        if username == "root":
-            output = ""
-        else:
-            output = "Password: \nsu: Authentication failure\n"
+        output = "Password: \nsu: Authentication failure\n" if username != "root" else ""
         trigger_alert(-1, f"Attacker used SU command => {cmd_name} {arg_str}", client_ip, username)
     elif cmd_name in ["wget", "curl"]:
         if "http" in arg_str:
@@ -804,7 +786,6 @@ def process_command(cmd, current_dir, username, fs, client_ip):
         output = ""
     else:
         output = f"bash: {cmd_name}: command not found"
-
     return output, new_dir
 
 # ================================
@@ -821,15 +802,12 @@ class HoneyPotServer(paramiko.ServerInterface):
         self.real_client = None
         self.exec_command = None
         super().__init__()
-
     def check_channel_request(self, kind, chanid):
         if kind == "session":
             return paramiko.OPEN_SUCCEEDED
         return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
-
     def get_allowed_auths(self, username):
         return "publickey,password"
-
     def check_auth_publickey(self, username, key):
         try:
             fingerprint = key.get_fingerprint().hex()
@@ -837,14 +815,12 @@ class HoneyPotServer(paramiko.ServerInterface):
             fingerprint = "unknown"
         print(f"[!] Tentative d'auth SSH par clé publique de {self.client_ip} (user={username}, empreinte={fingerprint})")
         return paramiko.AUTH_PARTIALLY_SUCCESSFUL
-
     def check_auth_password(self, username, password):
         self.username = username
         self.password = password
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         success = 1
         redirected_flag = 0
-
         if ENABLE_REDIRECTION:
             try:
                 real_client = paramiko.SSHClient()
@@ -861,7 +837,6 @@ class HoneyPotServer(paramiko.ServerInterface):
                     real_client.close()
                 except Exception:
                     pass
-
         try:
             conn = sqlite3.connect(DB_NAME)
             conn.execute("PRAGMA busy_timeout = 3000")
@@ -872,7 +847,6 @@ class HoneyPotServer(paramiko.ServerInterface):
             """, (timestamp, self.client_ip, username, password, success, redirected_flag))
             conn.commit()
             self.session_id = cur.lastrowid
-
             cur.execute("SELECT COUNT(*) FROM login_attempts WHERE ip = ?", (self.client_ip,))
             count = cur.fetchone()[0]
             if count >= BRUTE_FORCE_THRESHOLD:
@@ -886,14 +860,11 @@ class HoneyPotServer(paramiko.ServerInterface):
                         _brute_force_alerted.add(self.client_ip)
             conn.close()
         except Exception as e:
-            print(f"[!] Erreur lors de l'enregistrement DB: {e}")
-
+            print(f"[!] Erreur DB: {e}")
         return paramiko.AUTH_SUCCESSFUL
-
     def check_channel_shell_request(self, channel):
         self.event.set()
         return True
-
     def check_channel_exec_request(self, channel, command):
         try:
             self.exec_command = command.decode('utf-8')
@@ -911,29 +882,25 @@ def handle_connection(client_socket, client_addr):
     try:
         transport = paramiko.Transport(client_socket)
     except Exception as e:
-        print(f"[!] Impossible d'initier le transport SSH pour {client_ip}: {e}")
+        print(f"[!] Erreur transport SSH pour {client_ip}: {e}")
         client_socket.close()
         return
-
     try:
         transport.local_version = SSH_BANNER
         host_key = paramiko.RSAKey(filename="my_host_key")
         transport.add_server_key(host_key)
         server = HoneyPotServer(client_ip)
-
         try:
             transport.start_server(server=server)
         except paramiko.SSHException as e:
             print(f"[!] Négociation SSH échouée avec {client_ip}: {e}")
             transport.close()
             return
-
         chan = transport.accept(20)
         if chan is None:
-            print(f"[!] Aucun canal n'a été ouvert par {client_ip}")
+            print(f"[!] Aucun canal ouvert par {client_ip}")
             transport.close()
             return
-
         chan.settimeout(None)
         server.event.wait(10)
         if not server.event.is_set():
@@ -941,11 +908,9 @@ def handle_connection(client_socket, client_addr):
             chan.close()
             transport.close()
             return
-
-        # Copie du système de fichiers de base
+        # Copie du système de fichiers
         fs = {path: (value.copy() if isinstance(value, dict) else value)
               for path, value in BASE_FILE_SYSTEM.items()}
-
         if server.username and server.username in PREDEFINED_USERS:
             user_home = PREDEFINED_USERS[server.username]["home"]
             fs[user_home] = {"type": "dir", "contents": list(PREDEFINED_USERS[server.username]["files"].keys())}
@@ -961,50 +926,39 @@ def handle_connection(client_socket, client_addr):
             fs[f"{user_home}/credentials.txt"] = {"type": "file", "content": fs["/root/credentials.txt"]["content"]}
             fs[f"{user_home}/config_backup.zip"] = {"type": "file", "content": fs["/root/config_backup.zip"]["content"]}
             fs[f"{user_home}/ssh_keys.tar.gz"] = {"type": "file", "content": fs["/root/ssh_keys.tar.gz"]["content"]}
-
-        # Ouverture du log de session avancé
+        # Ouverture du log de session
         session_filename = os.path.join(SESSION_LOG_DIR, f"session_{client_ip}_{int(time.time())}.log")
         session_log = open(session_filename, "a")
-
         chan.send(b"Welcome to Debian GNU/Linux 10 (buster)\r\n\r\n")
-
         session_user = server.username if server.username else ""
         history = load_history(session_user)
         if session_user in PREDEFINED_USERS:
             current_dir = PREDEFINED_USERS[session_user]["home"]
         else:
             current_dir = "/root" if session_user=="root" else f"/home/{session_user}"
-
         session_log.write(f"{datetime.now().isoformat()} - Session started for user: {session_user}\n")
-
         while True:
             prompt = f"{session_user}@debian:{current_dir}$ "
             command = read_line_advanced(chan, prompt, history, current_dir, session_user, fs, session_log)
             if command == "":
                 continue
-
             history.append(command)
             save_history(session_user, history)
             session_log.write(f"{datetime.now().isoformat()} - Command entered: {command}\n")
-
             output, new_dir = process_command(command, current_dir, session_user, fs, client_ip)
             current_dir = new_dir
-
             if output:
                 if not output.endswith("\r\n"):
                     output += "\r\n"
                 chan.send(output.encode())
                 session_log.write(f"{datetime.now().isoformat()} - Command output: {output}\n")
-
             if command in ["exit", "logout"]:
                 print(f"[-] {client_ip} a fermé la session via '{command}'")
                 session_log.write(f"{datetime.now().isoformat()} - Session terminated by command: {command}\n")
                 break
-
         session_log.close()
-
     except Exception as ex:
-        print(f"[!] Exception dans handle_connection pour {client_ip}: {ex}")
+        print(f"[!] Exception pour {client_ip}: {ex}")
     finally:
         try:
             chan.close()
@@ -1013,13 +967,9 @@ def handle_connection(client_socket, client_addr):
         transport.close()
 
 # ================================
-# Création de l'arborescence (sans archive)
+# Création du système de fichiers factice
 # ================================
 def create_file_structure():
-    """
-    Crée localement une arborescence factice (Confidentiel/) avec des fichiers leurres.
-    Les dossiers et fichiers sont créés sur le disque pour piéger les attaquants.
-    """
     base_dir = "Confidentiel"
     directories = [
         os.path.join(base_dir, "home"),
@@ -1033,17 +983,13 @@ def create_file_structure():
     ]
     for d in directories:
         os.makedirs(d, exist_ok=True)
-
     # Création de quelques fichiers leurres
-    passwords_path = os.path.join(base_dir, "home", "admin", "passwords.txt")
-    with open(passwords_path, "w") as f:
+    with open(os.path.join(base_dir, "home", "admin", "passwords.txt"), "w") as f:
         for i in range(60):
             fake_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             fake_ip = f"192.168.1.{random.randint(2,254)}"
             f.write(f"{fake_time} - Failed login for user admin from {fake_ip}\n")
-
-    bash_history_path = os.path.join(base_dir, "home", "admin", ".bash_history")
-    with open(bash_history_path, "w") as f:
+    with open(os.path.join(base_dir, "home", "admin", ".bash_history"), "w") as f:
         fake_commands = [
             "ls -la", "cat /etc/passwd", "whoami", "sudo apt-get update",
             "tail -n 50 /var/log/syslog", "echo 'Hello World'",
@@ -1051,68 +997,35 @@ def create_file_structure():
         ]
         for _ in range(60):
             f.write(random.choice(fake_commands) + "\n")
-
-    confidential_notes_path = os.path.join(base_dir, "home", "admin", "confidential-notes.txt")
-    with open(confidential_notes_path, "w") as f:
+    with open(os.path.join(base_dir, "home", "admin", "confidential-notes.txt"), "w") as f:
         f.write("Top Secret:\nNe divulguez sous aucun prétexte les informations suivantes...\nDétails sensibles ici.\n")
-
-    ssh_config_backup_path = os.path.join(base_dir, "home", "admin", "ssh_config_backup.conf")
-    with open(ssh_config_backup_path, "w") as f:
+    with open(os.path.join(base_dir, "home", "admin", "ssh_config_backup.conf"), "w") as f:
         f.write(
-            "# SSH configuration backup\n"
-            "Port 22\nPermitRootLogin no\nPasswordAuthentication yes\n"
-            "ChallengeResponseAuthentication no\nUsePAM yes\nX11Forwarding yes\n"
-            "PrintMotd no\nAcceptEnv LANG LC_*\nSubsystem sftp /usr/lib/openssh/sftp-server\n"
-            "AllowTcpForwarding yes\nGatewayPorts no\nClientAliveInterval 120\n"
-            "ClientAliveCountMax 3\nLoginGraceTime 2m\nMaxAuthTries 6\n"
-            "MaxSessions 10\nPermitTunnel no\nAllowAgentForwarding yes\n"
+            "# SSH configuration backup\nPort 22\nPermitRootLogin no\nPasswordAuthentication yes\n"
+            "ChallengeResponseAuthentication no\nUsePAM yes\nX11Forwarding yes\nPrintMotd no\n"
+            "AcceptEnv LANG LC_*\nSubsystem sftp /usr/lib/openssh/sftp-server\nAllowTcpForwarding yes\n"
+            "GatewayPorts no\nClientAliveInterval 120\nClientAliveCountMax 3\nLoginGraceTime 2m\n"
+            "MaxAuthTries 6\nMaxSessions 10\nPermitTunnel no\nAllowAgentForwarding yes\n"
             "PermitUserEnvironment no\n"
         )
-
-    fin_report_path = os.path.join(base_dir, "home", "admin", "financial_report.pdf")
-    with open(fin_report_path, "w") as f:
-        f.write("CONFIDENTIAL FINANCIAL REPORT\nMarker: FIN-REPORT-XYZ\nDo not distribute.")
-
-    email_eml_path = os.path.join(base_dir, "home", "admin", "compromised_email.eml")
-    with open(email_eml_path, "w") as f:
-        f.write("Subject: Compromised Email\nMarker: COMP-EMAIL-ABC\nSensitive email content here.")
-
-    secret_plans_path = os.path.join(base_dir, "home", "admin", "secret_plans.txt")
-    with open(secret_plans_path, "w") as f:
-        f.write("Top Secret Plans\nMarker: SECRET-PLANS-123\nInternal use only.")
-
-    critical_data_path = os.path.join(base_dir, "secret", "critical_data.txt")
-    with open(critical_data_path, "w") as f:
+    with open(os.path.join(base_dir, "home", "admin", "financial_report.pdf"), "w") as f:
+        f.write("CONFIDENTIAL FINANCIAL REPORT\nMarker: FIN-REPORT-XYZ\nDo not distribute.\n")
+    with open(os.path.join(base_dir, "home", "admin", "compromised_email.eml"), "w") as f:
+        f.write("Subject: Compromised Email\nMarker: COMP-EMAIL-ABC\nSensitive email content here.\n")
+    with open(os.path.join(base_dir, "home", "admin", "secret_plans.txt"), "w") as f:
+        f.write("Top Secret Plans\nMarker: SECRET-PLANS-123\nInternal use only.\n")
+    with open(os.path.join(base_dir, "secret", "critical_data.txt"), "w") as f:
         f.write("CRITICAL INTERNAL DATA\nMarker: CRITICAL-DATA-999\nRestricted access.\n"
-                "Confidential information about project X.\n"
-                "Do not share this document with unauthorized personnel.\n"
-                "Contact security@example.com for more details.\n"
+                "Confidential information about project X.\nDo not share.\nContact security@example.com\n"
                 "Backup location: /backup/critical_data_backup.tar.gz\n")
-
-    db_config_path = os.path.join(base_dir, "etc", "db_config.ini")
-    with open(db_config_path, "w") as f:
-        f.write(
-            "[database]\n"
-            "host = 127.0.0.1\n"
-            "port = 3306\n"
-            "user = dbadmin\n"
-            "password = secret123\n"
-            "dbname = honeypot_db\n"
-        )
-
-    system_log_path = os.path.join(base_dir, "etc", "system.log")
-    with open(system_log_path, "w") as f:
-        f.write("Mar 15 12:00:00 debian systemd[1]: Starting system logging...\n"
-                "Mar 15 12:00:05 debian systemd[1]: Started system logging.\n")
-
-    index_php_path = os.path.join(base_dir, "var", "www", "index.php")
-    with open(index_php_path, "w") as f:
+    with open(os.path.join(base_dir, "etc", "db_config.ini"), "w") as f:
+        f.write("[database]\nhost = 127.0.0.1\nport = 3306\nuser = dbadmin\npassword = secret123\ndbname = honeypot_db\n")
+    with open(os.path.join(base_dir, "etc", "system.log"), "w") as f:
+        f.write("Mar 15 12:00:00 debian systemd[1]: Starting system logging...\nMar 15 12:00:05 debian systemd[1]: Started system logging.\n")
+    with open(os.path.join(base_dir, "var", "www", "index.html"), "w") as f:
         f.write("<?php\n echo 'Welcome to the honeypot website!';\n?>\n")
-
-    database_dump_path = os.path.join(base_dir, "var", "www", "database_dump.sql")
-    with open(database_dump_path, "w") as f:
+    with open(os.path.join(base_dir, "var", "www", "database_dump.sql"), "w") as f:
         f.write(
-            "-- Fake SQL dump\nDROP TABLE IF EXISTS users;\n"
             "CREATE TABLE users (id INT PRIMARY KEY, username VARCHAR(50), password VARCHAR(50));\n"
             "INSERT INTO users (id, username, password) VALUES (1, 'admin', 'supersecret');\n"
             "INSERT INTO users (id, username, password) VALUES (2, 'guest', 'guest');\n"
@@ -1137,8 +1050,7 @@ def create_file_structure():
             "INSERT INTO users (id, username, password) VALUES (21, 'user19', 'password19');\n"
             "INSERT INTO users (id, username, password) VALUES (22, 'user20', 'password20');\n"
         )
-
-    print(f"Structure de fichiers créée dans le dossier '{base_dir}'.")
+    print(f"Structure de fichiers créée dans '{base_dir}'.")
 
 # ======================================
 # Boucle principale
@@ -1148,7 +1060,6 @@ if __name__ == "__main__":
     create_file_structure()
     report_thread = threading.Thread(target=weekly_report_thread, daemon=True)
     report_thread.start()
-
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
@@ -1158,7 +1069,6 @@ if __name__ == "__main__":
         exit(1)
     server_sock.listen(100)
     print(f"[*] Honeypot SSH en écoute sur le port {PORT}...")
-
     try:
         while True:
             client, addr = server_sock.accept()
