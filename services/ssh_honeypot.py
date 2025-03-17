@@ -418,21 +418,30 @@ def advanced_keylog(session_log, key, delay):
 # Lecture interactive avancée (shell) + keylogging
 # ================================
 def read_line_advanced(chan, prompt, history, current_dir, username, fs, session_log):
+    """
+    Lecture interactive avancée, avec gestion manuelle des flèches,
+    de la tabulation pour l'autocomplétion, et keylogging.
+    """
     line_buffer = []
     cursor_pos = 0
     history_index = len(history)
     last_was_tab = False
+
+    # Prompt coloré
     colored_prompt = f"\033[1;32m{prompt.split('@')[0]}\033[0m@{prompt.split('@')[1]}"
     chan.send(colored_prompt.encode())
 
     def redraw_line():
+        # Efface la ligne courante et réaffiche
         chan.send(b"\r\033[K")
         chan.send((colored_prompt + "".join(line_buffer)).encode())
         diff = len(line_buffer) - cursor_pos
         if diff > 0:
+            # Déplace le curseur vers la gauche si on est au milieu
             chan.send(f"\033[{diff}D".encode())
 
     last_key_time = time.time()
+
     while True:
         try:
             byte = chan.recv(1)
@@ -440,21 +449,32 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
             break
         if not byte:
             break
+
+        # Convertit l'octet reçu en caractère (UTF-8)
         try:
             char = byte.decode("utf-8", errors="ignore")
         except Exception:
             continue
+
+        # Keylogging avancé (on log la touche et le délai)
         current_time = time.time()
         delay = current_time - last_key_time
         last_key_time = current_time
-        advanced_keylog(session_log, char, delay)
+        session_log.write(f"{datetime.now().isoformat()} - keystroke: {repr(char)} delay: {delay:.3f} sec\n")
+        session_log.flush()
+
+        # Gestion de la touche "Entrée"
         if char in ("\r", "\n"):
             chan.send(b"\r\n")
             session_log.write("\n")
             break
+
+        # Gestion de Ctrl+C
         if char == "\x03":
             chan.send(b"^C\r\n")
             return ""
+
+        # Gestion des touches de suppression (Backspace ou DEL)
         if char in ("\x7f", "\x08"):
             if cursor_pos > 0:
                 cursor_pos -= 1
@@ -462,28 +482,45 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
                 redraw_line()
             last_was_tab = False
             continue
+
+        # Gestion des séquences d'échappement (flèches, etc.)
         if char == "\x1b":
-            seq = byte
-            while True:
+            # On a détecté un ESC, on va lire plus d'octets
+            seq = [byte]
+            # On peut lire jusqu'à ~10 octets pour couvrir les séquences plus longues (p. ex. ^[[1;5A)
+            old_timeout = chan.gettimeout()
+            chan.settimeout(0.01)  # petit timeout pour ne pas bloquer indéfiniment
+
+            for _ in range(10):
                 try:
                     next_byte = chan.recv(1)
-                except Exception:
+                except:
                     break
                 if not next_byte:
                     break
-                seq += next_byte
+                seq.append(next_byte)
+                # On arrête si on tombe sur un caractère alphabétique ou '~'
                 try:
-                    if next_byte.decode("utf-8", errors="ignore").isalpha():
+                    decoded = next_byte.decode("utf-8", errors="ignore")
+                    if decoded.isalpha() or decoded == '~':
                         break
-                except Exception:
-                    break
-            if seq.endswith(b"A"):  # Flèche haut
+                except:
+                    pass
+
+            # On remet le timeout par défaut
+            chan.settimeout(old_timeout)
+
+            full_seq = b"".join(seq)
+            # On récupère le dernier caractère pour déterminer la flèche
+            last_char = full_seq[-1:]  # par ex. b'A', b'B', b'C', b'D', ou b'~'
+
+            if last_char == b"A":  # Flèche haut
                 if history_index > 0:
                     history_index -= 1
                     line_buffer = list(history[history_index])
                     cursor_pos = len(line_buffer)
                     redraw_line()
-            elif seq.endswith(b"B"):  # Flèche bas
+            elif last_char == b"B":  # Flèche bas
                 if history_index < len(history) - 1:
                     history_index += 1
                     line_buffer = list(history[history_index])
@@ -492,18 +529,22 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
                     line_buffer = []
                 cursor_pos = len(line_buffer)
                 redraw_line()
-            elif seq.endswith(b"C"):  # Flèche droite
+            elif last_char == b"C":  # Flèche droite
                 if cursor_pos < len(line_buffer):
                     cursor_pos += 1
                     redraw_line()
-            elif seq.endswith(b"D"):  # Flèche gauche
+            elif last_char == b"D":  # Flèche gauche
                 if cursor_pos > 0:
                     cursor_pos -= 1
                     redraw_line()
+            # Si besoin, on peut gérer d'autres cas (Home/End => ~, etc.)
             last_was_tab = False
             continue
+
+        # Gestion de la tabulation (autocomplétion)
         if char == "\t":
             if last_was_tab:
+                # Deux tabulations consécutives => affichage des complétions possibles
                 completions = get_completions("".join(line_buffer), current_dir, username, fs)
                 if completions:
                     chan.send(b"\r\n")
@@ -513,6 +554,7 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
                 last_was_tab = False
                 continue
             else:
+                # Première tabulation => tentative d'autocomplétion automatique
                 current_str = "".join(line_buffer)
                 suggestion = autocomplete(current_str, current_dir, username, fs)
                 if suggestion and suggestion != current_str:
@@ -522,14 +564,18 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
                         cursor_pos += 1
                     redraw_line()
                 else:
-                    chan.send(b"\x07")
+                    chan.send(b"\x07")  # bip
                 last_was_tab = True
                 continue
+
+        # Ajout du caractère normal dans le buffer
         line_buffer.insert(cursor_pos, char)
         cursor_pos += 1
         redraw_line()
         last_was_tab = False
+
     return "".join(line_buffer)
+
 
 # ================================
 # Traitement des commandes avec alertes [MOD]
