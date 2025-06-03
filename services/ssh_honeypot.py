@@ -10,6 +10,11 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from fpdf import FPDF
+from dotenv import load_dotenv
+from database import init_db, block_ip, is_ip_blocked, get_fake_users, log_ssh_attempt
+
+load_dotenv()
+FAKE_USERS = get_fake_users()
 
 # =======================
 # Configuration Variables
@@ -27,6 +32,9 @@ BRUTE_FORCE_THRESHOLD = 5
 _brute_force_alerted = set()
 _brute_force_lock = threading.Lock()
 
+# Fichier de clé hôte Paramiko
+HOST_KEY_PATH = "server_host.key"
+
 # Répertoire pour stocker les logs de session avancés
 SESSION_LOG_DIR = "session_logs"
 os.makedirs(SESSION_LOG_DIR, exist_ok=True)
@@ -34,12 +42,12 @@ os.makedirs(SESSION_LOG_DIR, exist_ok=True)
 # =======================
 # SMTP configuration (Gmail)
 # =======================
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 587
-SMTP_USER = "honeycute896@gmail.com"         # Remplacez par votre adresse email
-SMTP_PASS = "yvug acgb tpre gjgp"              # Remplacez par votre mot de passe d'application
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASS = os.getenv("SMTP_PASS")
 ALERT_FROM = SMTP_USER
-ALERT_TO = "admin@example.com"                # Adresse destinataire des alertes
+ALERT_TO = os.getenv("ALERT_TO", "admin@example.com")
 
 # ================================
 # Comptes utilisateurs préconfigurés
@@ -864,8 +872,11 @@ class HoneyPotServer(paramiko.ServerInterface):
     def check_auth_password(self, username, password):
         self.username = username
         self.password = password
+        if is_ip_blocked(self.client_ip):
+            print(f"[!] Tentative depuis IP bloqu\xC3\xA9e {self.client_ip}")
+            return paramiko.AUTH_FAILED
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        success = 1
+        success = 1 if FAKE_USERS.get(username) == password else 0
         redirected_flag = 0
         if ENABLE_REDIRECTION:
             try:
@@ -892,6 +903,7 @@ class HoneyPotServer(paramiko.ServerInterface):
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (timestamp, self.client_ip, username, password, success, redirected_flag))
             conn.commit()
+            log_ssh_attempt(self.client_ip, username, password, self.exec_command or "")
             self.session_id = cur.lastrowid
             cur.execute("SELECT COUNT(*) FROM login_attempts WHERE ip = ?", (self.client_ip,))
             count = cur.fetchone()[0]
@@ -903,6 +915,7 @@ class HoneyPotServer(paramiko.ServerInterface):
                             VALUES (?, ?, ?, ?, ?)
                         """, (timestamp, self.client_ip, username, "Brute-force", f"Tentatives multiples depuis {self.client_ip}"))
                         conn.commit()
+                        block_ip(self.client_ip)
                         _brute_force_alerted.add(self.client_ip)
             conn.close()
         except Exception as e:
@@ -933,7 +946,11 @@ def handle_connection(client_socket, client_addr):
         return
     try:
         transport.local_version = SSH_BANNER
-        host_key = paramiko.RSAKey(filename="my_host_key")
+        if os.path.exists(HOST_KEY_PATH):
+            host_key = paramiko.RSAKey(filename=HOST_KEY_PATH)
+        else:
+            host_key = paramiko.RSAKey.generate(2048)
+            host_key.write_private_key_file(HOST_KEY_PATH)
         transport.add_server_key(host_key)
         server = HoneyPotServer(client_ip)
         try:
@@ -1102,7 +1119,7 @@ def create_file_structure():
 # Boucle principale
 # ======================================
 if __name__ == "__main__":
-    init_database()
+    init_db()
     create_file_structure()
     report_thread = threading.Thread(target=weekly_report_thread, daemon=True)
     report_thread.start()
