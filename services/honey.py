@@ -48,10 +48,10 @@ FAKE_SERVICES = {
 # =======================
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
-SMTP_USER = "your_email@gmail.com"  # Remplacer par votre adresse Gmail
-SMTP_PASS = "your_app_password"  # Remplacer par votre mot de passe d'application
+SMTP_USER = "honeycute896@gmail.com"         # Remplacez par votre adresse email
+SMTP_PASS = "yvug acgb tpre gjgp"              # Remplacez par votre mot de passe d'application
 ALERT_FROM = SMTP_USER
-ALERT_TO = "admin@example.com"
+ALERT_TO = "admin@example.com"                # Adresse destinataire des alertes
 
 # ================================
 # Comptes utilisateurs préconfigurés
@@ -661,7 +661,7 @@ def trigger_alert(session_id, event_type, details, client_ip, username):
     subject = f"[SERVEUR SSH] Alerte: {client_ip} (user={username})"
     body = (
         f"Date/Heure   : {timestamp}\n"
-        f"Client IP}    : {client_ip}\n"
+        f"Client IP    : {client_ip}\n"
         f"Utilisateur : {username}\n"
         f"Événement type : {event_type}\n"
         f"Détails      : {details}\n"
