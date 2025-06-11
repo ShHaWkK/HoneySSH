@@ -25,6 +25,7 @@ import csv
 import subprocess
 import psutil
 import shutil
+import asyncio
 from telegram import Bot
 from telegram.error import TelegramError
 
@@ -64,10 +65,11 @@ FAKE_SERVICES = {
 
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
-SMTP_USER = "honeycute896@gmail.com"
-SMTP_PASS = "yvug acgb tpre gjjp"
+SMTP_USER = "honeycute896@gmail.com"  # Replace with your email
+SMTP_PASS = "jawm fmcm dmaf qkyl"  # Replace with your app-specific password
 ALERT_FROM = SMTP_USER
-ALERT_TO = "admin@example.com"
+ALERT_TO = "admin@example.com"  # Replace with a valid email
+
 
 PREDEFINED_USERS = {
     "admin": {"home": "/home/admin", "password": hashlib.sha256("admin123".encode()).hexdigest(), "files": {
@@ -166,32 +168,50 @@ def load_filesystem():
             for path, type_, content, owner, perms, mtime in cur.fetchall():
                 fs[path] = {"type": type_, "content": content, "owner": owner, "permissions": perms, "mtime": mtime}
                 parent_dir = "/".join(path.split("/")[:-1]) or "/"
-                # Ensure parent_dir exists and has a 'contents' key
                 if parent_dir not in fs:
                     fs[parent_dir] = {"type": "dir", "contents": [], "owner": "root", "permissions": "rwxr-xr-x", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                elif "contents" not in fs[parent_dir]:
-                    fs[parent_dir]["contents"] = []
                 if path.split("/")[-1] not in fs[parent_dir]["contents"]:
                     fs[parent_dir]["contents"].append(path.split("/")[-1])
     except sqlite3.Error as e:
         logging.error(f"[!] Erreur FS load: {e}")
     return fs
 
-def save_filesystem(fs, base_path="/honeypot_fs"):
+def save_filesystem(fs, base_path="honeypot_fs"):
+    """
+    Enregistre en base ET reproduit le FS dans un dossier local ./honeypot_fs
+    (plutôt que sous /honeypot_fs qui demande des droits root).
+    """
+    # 1) Créer le dossier racine local s’il n’existe pas
+    os.makedirs(base_path, exist_ok=True)
+
+    # 2) Parcourir chaque entrée et écrire dans ./honeypot_fs
+    for path, data in fs.items():
+        local_path = os.path.join(base_path, path.lstrip("/"))
+        if data["type"] == "dir":
+            os.makedirs(local_path, exist_ok=True)
+        else:
+            parent = os.path.dirname(local_path)
+            os.makedirs(parent, exist_ok=True)
+            with open(local_path, "w", encoding="utf-8") as f:
+                f.write(data.get("content", ""))
+
+    # 3) Enregistrer en base SQLite
     try:
         with sqlite3.connect(FS_DB) as conn:
             cur = conn.cursor()
             for path, data in fs.items():
-                full_path = f"{base_path}{path}"
-                if data["type"] == "dir" and not os.path.exists(full_path):
-                    os.makedirs(full_path, exist_ok=True)
-                elif data["type"] == "file":
-                    with open(full_path, "w") as f:
-                        f.write(data.get("content", ""))
-                cur.execute("INSERT OR REPLACE INTO filesystem (path, type, content, owner, permissions, mtime) VALUES (?, ?, ?, ?, ?, ?)",
-                            (path, data["type"], data.get("content", ""), data.get("owner", "root"), data.get("permissions", "rw-r--r--"), data.get("mtime", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))))
+                cur.execute(
+                    "INSERT OR REPLACE INTO filesystem (path, type, content, owner, permissions, mtime) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        path,
+                        data["type"],
+                        data.get("content", ""),
+                        data.get("owner", "root"),
+                        data.get("permissions", "rw-r--r--"),
+                        data.get("mtime", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    )
+                )
             conn.commit()
-        shutil.copytree(base_path, FS_DB.replace(".db", "_backup"), dirs_exist_ok=True)
     except sqlite3.Error as e:
         logging.error(f"[!] Erreur FS save: {e}")
 
@@ -239,14 +259,14 @@ current_language = "fr"
 
 def send_telegram_alert(message):
     try:
-        bot.send_message(chat_id=CHAT_ID, text=message)
+        # exécute la coroutine
+        asyncio.run(bot.send_message(chat_id=CHAT_ID, text=message))
         logging.info(f"[TELEGRAM] Alerte envoyée: {message}")
     except TelegramError as e:
         logging.error(f"[!] Erreur Telegram: {e}")
 
-
 def send_alert(session_id, event_type, details, client_ip, username):
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
     message = f"[ALERT] {timestamp} - {client_ip} ({username}): {event_type} - {details}"
     logging.info(message)
     send_telegram_alert(message)
@@ -1059,7 +1079,7 @@ class Server(paramiko.ServerInterface):
     def get_allowed_auths(self, username):
         return 'password'
 
-def handle_session(chan, client_ip, session_id):
+def handle_session(chan, client_ip, session_id, server_obj):
     try:
         username = "unknown"
         transport = chan.get_transport()
@@ -1125,35 +1145,40 @@ def redirect_ssh(client_ip, username, session_id):
         logging.error(f"[!] Redirection error {client_ip}: {e}")
         send_alert(session_id, "Redirection Failure", f"Failed to redirect: {str(e)}", client_ip, username)
 
-def handle_connection(client, addr):
-    session_id = str(random.randint(1000, 9999))
-    logging.info(f"[*] Nouvelle connexion de {addr[0]}:{addr[1]} (Session ID: {session_id})")
-    send_alert(session_id, "Nouvelle Connexion", f"Connexion de {addr[0]}", addr[0], "unknown")
+def handle_connection(client, addr, server_obj):
+    client_ip  = addr[0]
+    session_id = server_obj.session_id
 
+    logging.info(f"[*] Nouvelle connexion de {client_ip}:{addr[1]} (Session ID: {session_id})")
+    send_alert(session_id, "Nouvelle Connexion", f"Connexion de {client_ip}", client_ip, "unknown")
+
+    transport = paramiko.Transport(client)
     try:
-        transport = paramiko.Transport(client)
         transport.add_server_key(paramiko.RSAKey.generate(bits=2048))
-        server = Server(addr[0], session_id)
-        transport.start_server(server=server)
+        transport.start_server(server=server_obj)
 
         chan = transport.accept(20)
         if chan is None:
-            logging.error(f"[!] Échec de l'acceptation du canal pour {addr[0]}")
+            logging.error(f"[!] Échec accept SSH pour {client_ip}")
             return
 
         chan.send(SSH_BANNER.encode() + b"\r\n")
-        handle_session(chan, addr[0], session_id)
+        # Tant que handle_session ne rentre pas dans la logique de redirection,
+        # le shell du honeypot restera actif.
+        handle_session(chan, client_ip, session_id, server_obj)
 
     except Exception as e:
-        logging.error(f"[!] Erreur de connexion {addr[0]}: {e}")
-        send_alert(session_id, "Connection Error", f"Connection failed: {str(e)}", addr[0], "unknown")
+        logging.error(f"[!] Erreur connexion {client_ip}: {e}")
+        send_alert(session_id, "Connection Error", f"Connection failed: {e}", client_ip, "unknown")
+
     finally:
         try:
             transport.close()
         except:
             pass
         client.close()
-        logging.info(f"[*] Connexion fermée pour {addr[0]} (Session ID: {session_id})")
+        logging.info(f"[*] Connexion fermée pour {client_ip} (Session ID: {session_id})")
+
 
 def fake_ftp_server(port, stop_event):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1262,9 +1287,11 @@ def signal_handler(sig, frame):
 
 def start_honeypot():
     init_database()
+    # Lancement des rapports en arrière-plan
     threading.Thread(target=send_weekly_report, daemon=True).start()
     threading.Thread(target=send_periodic_report, daemon=True).start()
-    
+
+    # Vérification SMTP
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
             smtp.starttls()
@@ -1274,44 +1301,52 @@ def start_honeypot():
         logging.error("SMTP Authentication failed: Check SMTP_USER and SMTP_PASS")
         sys.exit(1)
     except Exception as e:
-        logging.error(f"SMTP test failed: {str(e)}")
+        logging.error(f"SMTP test failed: {e}")
         sys.exit(1)
-    
+
+    # Démarrage des faux services
     global stop_event
     stop_event = threading.Event()
     executor = ThreadPoolExecutor(max_workers=len(FAKE_SERVICES))
-    for service, port in FAKE_SERVICES.items():
-        if service == "ftp":
+    for svc, port in FAKE_SERVICES.items():
+        if svc == "ftp":
             executor.submit(fake_ftp_server, port, stop_event)
-        elif service == "http":
+        elif svc == "http":
             executor.submit(fake_http_server, port, stop_event)
-        elif service == "mysql":
+        elif svc == "mysql":
             executor.submit(fake_mysql_server, port, stop_event)
-    
+
+    # Boucle d’acceptation SSH
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((HOST, PORT))
     server_socket.listen(5)
     server_socket.settimeout(1.0)
-    logging.info(f"Honeypot SSH démarré sur {HOST}:{PORT} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} CEST")
-    
+    logging.info(f"Honeypot SSH démarré sur {HOST}:{PORT} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
     while not stop_event.is_set():
         try:
-            readable, _, _ = select.select([server_socket], [], [], 1.0)
-            if server_socket in readable:
-                client, addr = server_socket.accept()
-                client.settimeout(60)
-                threading.Thread(target=handle_connection, args=(client, addr), daemon=True).start()
+            client, addr = server_socket.accept()
+            client.settimeout(60)
+            session_id = str(uuid.uuid4())
+            server_obj = Server(addr[0], session_id)
+            threading.Thread(
+                target=handle_connection,
+                args=(client, addr, server_obj),
+                daemon=True
+            ).start()
         except socket.timeout:
             continue
         except Exception as e:
-            logging.error(f"[!] Erreur serveur: {e}")
+            logging.error(f"[!] Erreur serveur accept: {e}")
             time.sleep(1)
-    
+
+    # Arrêt propre
     stop_event.set()
     executor.shutdown(wait=True)
     server_socket.close()
     logging.info("[*] Serveur arrêté")
+
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
