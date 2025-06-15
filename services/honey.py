@@ -10,7 +10,7 @@ import os
 import smtplib
 import json
 from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMULTIPART
+from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
 from fpdf import FPDF
 import uuid
@@ -26,6 +26,18 @@ import termios
 import tty
 import ipapi
 from io import StringIO
+import logging
+
+# Configuration du logging avancé
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s - IP: %(client_ip)s - Session ID: %(session_id)s',
+    handlers=[
+        logging.FileHandler('honeypot.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Configuration
 HOST = ""
@@ -42,17 +54,17 @@ BRUTE_FORCE_THRESHOLD = 5
 BRUTE_FORCE_WINDOW = 300
 CMD_LIMIT_PER_SESSION = 50
 CONNECTION_LIMIT_PER_IP = 10
-PORT_SCAN_THRESHOLD = 10  # Number of suspicious connections per minute
-TRAP_CLEANUP_INTERVAL = 86400  # 24 hours in seconds
-RISK_SCORE_THRESHOLD = 50  # Threshold for risk score alert
-_risk_scores = {}  # Risk score per session IP
-_brute_force_attempts = {}  # Track brute force attempts
-_brute_force_alerted = set()  # Track alerted brute force IPs
+PORT_SCAN_THRESHOLD = 10  # Nombre de connexions suspectes par minute
+TRAP_CLEANUP_INTERVAL = 86400  # 24 heures en secondes
+RISK_SCORE_THRESHOLD = 50  # Seuil d'alerte de score de risque
+_risk_scores = {}  # Score de risque par session IP
+_brute_force_attempts = {}  # Suivi des tentatives de force brute
+_brute_force_alerted = set()  # Suivi des IPs alertées pour force brute
 _brute_force_lock = threading.Lock()
 _connection_count = {}
 _connection_lock = threading.Lock()
 fs_lock = threading.Lock()
-_scan_attempts = {}  # Port scan attempts by IP
+_scan_attempts = {}  # Tentatives de scan de port par IP
 
 SESSION_LOG_DIR = None
 
@@ -141,7 +153,7 @@ COMMAND_OPTIONS = {
 @lru_cache(maxsize=10)
 def get_dynamic_df(): return f"Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        50G   {random.randint(5,10)}G   {random.randint(30,45)}G  {random.randint(10,20)}% /\ntmpfs           100M     0M  100M   0% /tmp"
 @lru_cache(maxsize=10)
-def get_dynamic_uptime(): return f"10:43 AM CEST, Fri Jun 13, 2025 up {random.randint(3,10)} days, {random.randint(0,23)}:{random.randint(0,59):02d}, {random.randint(1,5)} user{'s' if random.randint(1,5)>1 else ''}, load average: {random.uniform(0.00,1.00):.2f}, {random.uniform(0.00,1.00):.2f}, {random.uniform(0.00,1.00):.2f}"
+def get_dynamic_uptime(): return f"03:07 AM CEST, Sat Jun 14, 2025 up {random.randint(3,10)} days, {random.randint(0,23)}:{random.randint(0,59):02d}, {random.randint(1,5)} user{'s' if random.randint(1,5)>1 else ''}, load average: {random.uniform(0.00,1.00):.2f}, {random.uniform(0.00,1.00):.2f}, {random.uniform(0.00,1.00):.2f}"
 @lru_cache(maxsize=10)
 def get_dynamic_ps(): return "\r\n".join(["USER       PID %CPU %MEM    VSZ   RSS TTY   STAT START   TIME COMMAND"] + [f"{random.choice(['root','admin','devops']):<10} {random.randint(1,5000):<6} {random.uniform(0.0,5.0):<5.1f} {random.uniform(0.5,3.0):<5.1f} {random.randint(10000,50000):<7} {random.randint(1000,5000):<6} {random.choice(['pts/0','pts/1','?','tty7']):<6} {random.choice(['Ss','S+','R']):<5} {(datetime.now()-timedelta(hours=random.randint(1,24))).strftime('%H:%M'):<8} {random.randint(0,2)}:{random.randint(0,59):02d} {random.choice(['/sbin/init','/usr/sbin/sshd -D','/usr/bin/python3 app.py'])}" for _ in range(5)])
 def get_dynamic_top(): return "top - %s up %d days, %02d:%02d, %d user%s, load average: %.2f, %.2f, %.2f\nTasks: %d total, %d running, %d sleeping, %d stopped, %d zombie\n%%Cpu(s): %.1f us, %.1f sy, %.1f ni, %.1f id, %.1f wa, %.1f hi, %.1f si, %.1f st\nMiB Mem : %d total, %d free, %d used, %d buff/cache\n%s" % (datetime.now().strftime("%H:%M:%S"), random.randint(3,10), random.randint(0,23), random.randint(0,59), random.randint(1,5), "s" if random.randint(1,5)>1 else "", random.uniform(0.0,1.0), random.uniform(0.0,1.0), random.uniform(0.0,1.0), random.randint(50,100), random.randint(1,5), random.randint(40,80), 0, 0, random.uniform(0,10), random.uniform(0,5), 0, random.uniform(80,90), random.uniform(0,2), random.uniform(0,1), random.uniform(0,1), 0, random.randint(16000,32000), random.randint(1000,5000), random.randint(5000,10000), random.randint(1000,5000), get_dynamic_ps().split("\n")[1:5])
@@ -157,7 +169,7 @@ def get_dynamic_network_scan(): return "\n".join([f"{ip}:{FAKE_SERVICES[service]
 def get_dynamic_arp(): return "\n".join(["Address                  HWtype  HWaddress           Flags Mask            Iface"] + [f"{ip:<24} ether   {':'.join(f'{random.randint(0,255):02x}' for _ in range(6))}   C                     eth0" for ip in FAKE_NETWORK_HOSTS])
 @lru_cache(maxsize=10)
 def get_dynamic_who(): return "\n".join([f"{user:<10} {random.choice(['pts/0','pts/1','tty7']):<8} {(datetime.now()-timedelta(minutes=random.randint(0,1440))).strftime('%Y-%m-%d %H:%M')} 192.168.1.{random.randint(10,50)}" for user in ["admin", "devops", "dbadmin"] + [f"temp_{''.join(random.choices(string.ascii_lowercase, k=6))}" for _ in range(random.randint(0,3))]])
-def get_dynamic_w(): return " 10:43 AM CEST, Fri Jun 13, 2025 up 7 days,  3:45,  2 users,  load average: 0.10, 0.20, 0.30\nUSER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT\n" + "\n".join(get_dynamic_who().split("\n")[1:3])
+def get_dynamic_w(): return " 03:07 AM CEST, Sat Jun 14, 2025 up 7 days,  3:45,  2 users,  load average: 0.10, 0.20, 0.30\nUSER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT\n" + "\n".join(get_dynamic_who().split("\n")[1:3])
 def get_dev_null(): return ""
 def get_dev_zero(): return "\0" * 1024
 
@@ -174,8 +186,9 @@ def init_filesystem_db():
                     mtime TEXT
                 )
             """)
+        logger.info("Filesystem database initialized", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
     except sqlite3.Error as e:
-        print(f"[!] Filesystem DB init error: {e}")
+        logger.error(f"Filesystem DB init error: {e}", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
         raise
 
 def init_database():
@@ -217,8 +230,9 @@ def init_database():
                     details TEXT
                 )
             """)
+        logger.info("Database initialized", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
     except sqlite3.Error as e:
-        print(f"[!] DB init error: {e}")
+        logger.error(f"DB init error: {e}", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
         raise
 
 def load_filesystem():
@@ -244,7 +258,7 @@ def load_filesystem():
                 if path != "/" and row["type"] == "dir" and path not in fs[parent_dir]["contents"]:
                     fs[parent_dir]["contents"].append(path.split("/")[-1])
     except sqlite3.Error as e:
-        print(f"[!] Filesystem load error: {e}")
+        logger.error(f"Filesystem load error: {e}", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
         return None
     return fs if fs else None
 
@@ -257,8 +271,9 @@ def save_filesystem(fs):
                     "INSERT INTO filesystem (path, type, content, owner, permissions, mtime) VALUES (?, ?, ?, ?, ?, ?)",
                     (path, data["type"], data.get("content", "") if not callable(data.get("content")) else "", data.get("owner", "root"), data.get("permissions", "rw-r--r--"), data.get("mtime", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
                 )
+        logger.info("Filesystem saved", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
     except sqlite3.Error as e:
-        print(f"[!] Filesystem save error: {e}")
+        logger.error(f"Filesystem save error: {e}", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
 
 BASE_FILE_SYSTEM = {
     "/": {"type": "dir", "contents": ["bin", "sbin", "usr", "var", "opt", "root", "home", "etc", "tmp", "proc", "dev", "sys", "lib"], "owner": "root", "permissions": "rwxr-xr-x", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
@@ -307,7 +322,7 @@ def add_vulnerabilities(fs):
 def trigger_alert(session_id, event_type, details, client_ip, username, location=None):
     geo_info = ipapi.location(client_ip) if location is None else location
     location_str = f" (Location: {geo_info.get('city', 'Unknown')}, {geo_info.get('country', 'Unknown')})" if geo_info else ""
-    print(f"[ALERT] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Session ID: {session_id} - {event_type} - {details}{location_str} from {client_ip} ({username})")
+    logger.warning(f"{event_type} - {details}{location_str} from {client_ip} ({username})", extra={'client_ip': client_ip, 'session_id': session_id})
     try:
         with sqlite3.connect(DB_NAME) as conn:
             conn.execute(
@@ -315,7 +330,7 @@ def trigger_alert(session_id, event_type, details, client_ip, username, location
                 (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), client_ip, username, event_type, f"{details}{location_str}")
             )
     except sqlite3.Error as e:
-        print(f"[!] Event log error: {e}")
+        logger.error(f"Event log error: {e}", extra={'client_ip': client_ip, 'session_id': session_id})
 
 def check_bruteforce(client_ip, username, password):
     with _brute_force_lock:
@@ -333,7 +348,7 @@ def check_bruteforce(client_ip, username, password):
 def detect_port_scan(client_ip):
     now = time.time()
     attempts = _scan_attempts.get(client_ip, [])
-    attempts = [t for t in attempts if now - t < 60]  # 1-minute window
+    attempts = [t for t in attempts if now - t < 60]  # Fenêtre de 1 minute
     attempts.append(now)
     _scan_attempts[client_ip] = attempts
     if len(attempts) >= PORT_SCAN_THRESHOLD:
@@ -342,7 +357,6 @@ def detect_port_scan(client_ip):
     return False
 
 def cleanup_bruteforce_attempts():
-    global _brute_force_attempts, _brute_force_alerted, _scan_attempts
     while True:
         with _brute_force_lock:
             now = time.time()
@@ -350,18 +364,20 @@ def cleanup_bruteforce_attempts():
             _brute_force_alerted = {k for k in _brute_force_alerted if k in _brute_force_attempts and _brute_force_attempts[k]}
             _scan_attempts = {k: [t for t in v if now - t < 60] for k, v in _scan_attempts.items()}
         time.sleep(60)
+        logger.info("Bruteforce and scan attempts cleaned up", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
 
 def cleanup_trap_files():
     while True:
         with fs_lock:
             for path in list(FS.keys()):
-                if path.endswith(".trap_") and random.random() < 0.1:  # 10% chance per cycle
+                if path.endswith(".trap_") and random.random() < 0.1:  # 10% de chance par cycle
                     parent_dir = "/".join(path.split("/")[:-1]) or "/"
                     if parent_dir in FS and path.split("/")[-1] in FS[parent_dir]["contents"]:
                         FS[parent_dir]["contents"].remove(path.split("/")[-1])
                     del FS[path]
             save_filesystem(FS)
         time.sleep(TRAP_CLEANUP_INTERVAL)
+        logger.info("Trap files cleaned up", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
 
 def calculate_risk_score(commands):
     score = 0
@@ -376,7 +392,7 @@ def calculate_risk_score(commands):
         for pattern, points in patterns.items():
             if re.search(pattern, cmd.lower()):
                 score += points
-    return min(score, 100)  # Cap at 100
+    return min(score, 100)  # Cap à 100
 
 def generate_pdf_report(report_type):
     pdf = FPDF()
@@ -410,7 +426,7 @@ def generate_pdf_report(report_type):
     return pdf_output
 
 def send_report(report_path, report_type):
-    msg = MIMEMULTIPART()
+    msg = MIMEMultipart()
     msg['From'] = ALERT_FROM
     msg['To'] = ALERT_TO
     msg['Subject'] = f"Honeypot Report - {report_type}"
@@ -418,22 +434,28 @@ def send_report(report_path, report_type):
         part = MIMEApplication(f.read(), Name=os.path.basename(report_path))
         part['Content-Disposition'] = f'attachment; filename="{os.path.basename(report_path)}"'
         msg.attach(part)
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-        server.starttls()
-        server.login(SMTP_USER, SMTP_PASS)
-        server.send_message(msg)
-    os.remove(report_path)
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+        logger.info(f"Report {report_type} sent successfully", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
+    except Exception as e:
+        logger.error(f"Failed to send report {report_type}: {e}", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
+    finally:
+        os.remove(report_path)
 
 def schedule_reports():
     while True:
         now = datetime.now()
-        if now.minute % 15 == 0 and now.second < 5:  # Every 15 minutes
+        if now.minute % 15 == 0 and now.second < 5:  # Toutes les 15 minutes
             send_report(generate_pdf_report("15min"), "15min")
-        if now.minute == 0 and now.second < 5:  # Every hour
+        if now.minute == 0 and now.second < 5:  # Toutes les heures
             send_report(generate_pdf_report("hourly"), "hourly")
-        if now.weekday() == 0 and now.hour == 0 and now.minute == 0 and now.second < 5:  # Every Monday at midnight
+        if now.weekday() == 0 and now.hour == 0 and now.minute == 0 and now.second < 5:  # Chaque lundi à minuit
             send_report(generate_pdf_report("weekly"), "weekly")
         time.sleep(5)
+        logger.info("Report scheduling cycle completed", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
 
 def detect_attacker_os(client_ip, transport):
     banner = transport.get_banner().decode().lower() if transport and transport.get_banner() else ""
@@ -451,13 +473,13 @@ def get_completions(cmd, current_dir, username, fs, command_history):
     if not cmd_parts:
         return list(COMMAND_OPTIONS.keys())
     prefix = cmd_parts[-1]
-    if len(cmd_parts) == 1:  # Command autocompletion
+    if len(cmd_parts) == 1:  # Autocomplétion des commandes
         for command in COMMAND_OPTIONS:
             if command.startswith(prefix):
                 completions.add(command)
         for option in COMMAND_OPTIONS.get(prefix, []):
             completions.add(f"{prefix} {option}")
-    else:  # Path or argument autocompletion
+    else:  # Autocomplétion des chemins ou arguments
         cmd_name = cmd_parts[0].lower()
         if cmd_name in ["ls", "cd", "cat", "rm", "find", "vim", "nano"] and current_dir in fs and fs[current_dir]["type"] == "dir":
             base_path = current_dir if current_dir != "/" else ""
@@ -499,7 +521,7 @@ def process_command(cmd, current_dir, username, fs, client_ip, session_id, sessi
     output = ""
     new_dir = current_dir
 
-    # Update risk score
+    # Mise à jour du score de risque
     with _brute_force_lock:
         _risk_scores[session_id] = _risk_scores.get(session_id, 0) + calculate_risk_score([cmd])
         if _risk_scores[session_id] >= RISK_SCORE_THRESHOLD:
@@ -881,7 +903,7 @@ def process_command(cmd, current_dir, username, fs, client_ip, session_id, sessi
                 (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), client_ip, username or "unknown", cmd, session_id)
             )
     except sqlite3.Error as e:
-        print(f"[!] Command log error: {e}")
+        logger.error(f"Command log error: {e}", extra={'client_ip': client_ip, 'session_id': session_id})
 
     return output, new_dir, jobs, cmd_count
 
@@ -893,7 +915,7 @@ def read_char(chan):
         if r:
             return chan.recv(1).decode()
     except (termios.error, socket.error) as e:
-        print(f"[!] Error reading char: {e}")
+        logger.error(f"Error reading char: {e}", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
         return None
     finally:
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
@@ -934,31 +956,31 @@ def read_line_advanced(chan, prompt, command_history, current_dir, username, fs,
                 for c in completions[:10]:
                     chan.send(f"{c}\r\n".encode())
                 chan.send(f"\r{prompt.decode()}{buffer}".encode())
-        elif char == "\033":  # Escape sequence (arrow keys)
+        elif char == "\033":  # Séquence d'échappement (flèches)
             next_char = read_char(chan)
             if next_char == "[":
                 final_char = read_char(chan)
-                if final_char == "A":  # Up arrow
+                if final_char == "A":  # Flèche haut
                     if history_pos > 0:
                         history_pos -= 1
                         buffer = command_history[history_pos] if history_pos < len(command_history) else ""
                         cursor_pos = len(buffer)
                         chan.send(f"\r\033[K{prompt.decode()}{buffer}".encode())
-                elif final_char == "B":  # Down arrow
+                elif final_char == "B":  # Flèche bas
                     if history_pos < len(command_history):
                         history_pos += 1
                         buffer = command_history[history_pos] if history_pos < len(command_history) else ""
                         cursor_pos = len(buffer)
                         chan.send(f"\r\033[K{prompt.decode()}{buffer}".encode())
-                elif final_char == "C":  # Right arrow
+                elif final_char == "C":  # Flèche droite
                     if cursor_pos < len(buffer):
                         cursor_pos += 1
                         chan.send(f"\r\033[K{prompt.decode()}{buffer[:cursor_pos]}\033[1C".encode())
-                elif final_char == "D":  # Left arrow
+                elif final_char == "D":  # Flèche gauche
                     if cursor_pos > 0:
                         cursor_pos -= 1
                         chan.send(f"\r\033[K{prompt.decode()}{buffer[:cursor_pos]}\033[1D".encode())
-        elif char == "\x7f":  # Backspace
+        elif char == "\x7f":  # Retour arrière
             if cursor_pos > 0:
                 buffer = buffer[:cursor_pos-1] + buffer[cursor_pos:]
                 cursor_pos -= 1
@@ -972,7 +994,7 @@ def read_line_advanced(chan, prompt, command_history, current_dir, username, fs,
 class HoneypotSSHServer(paramiko.ServerInterface):
     def __init__(self):
         self.event = threading.Event()
-        self.login_attempts = {}  # Track attempts per IP and user
+        self.login_attempts = {}  # Suivi des tentatives par IP et utilisateur
         self.transport = None
         self.session_id = None
         self.client_ip = None
@@ -981,7 +1003,7 @@ class HoneypotSSHServer(paramiko.ServerInterface):
         self.password = None
 
     def set_transport(self, transport):
-        """Method to set the transport once available"""
+        """Méthode pour définir le transport une fois disponible"""
         self.transport = transport
         if transport:
             try:
@@ -1006,7 +1028,7 @@ class HoneypotSSHServer(paramiko.ServerInterface):
         key = (client_ip, username)
         self.login_attempts[key] = self.login_attempts.get(key, 0) + 1
         attempt_count = self.login_attempts[key]
-        self.password = password  # Store password for later use in the session
+        self.password = password  # Stocker le mot de passe pour une utilisation ultérieure dans la session
 
         if username in PREDEFINED_USERS:
             stored_hash = PREDEFINED_USERS[username].get("password", "")
@@ -1017,9 +1039,9 @@ class HoneypotSSHServer(paramiko.ServerInterface):
                             conn.execute("INSERT INTO login_attempts (timestamp, ip, username, password, success, redirected) VALUES (?, ?, ?, ?, ?, ?)",
                                         (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), client_ip, username, password, 1, 0))
                     except sqlite3.Error as e:
-                        print(f"[!] Login log error: {e}")
+                        logger.error(f"Login log error: {e}", extra={'client_ip': client_ip, 'session_id': self.session_id})
                     trigger_alert(self.session_id, "Successful Login", f"User {username} logged in from {client_ip}", client_ip, username)
-                    self.login_attempts[key] = 0  # Reset after success
+                    self.login_attempts[key] = 0  # Réinitialiser après succès
                     self.username = username
                     return paramiko.AUTH_SUCCESSFUL
                 else:
@@ -1031,7 +1053,7 @@ class HoneypotSSHServer(paramiko.ServerInterface):
                         conn.execute("INSERT INTO login_attempts (timestamp, ip, username, password, success, redirected) VALUES (?, ?, ?, ?, ?, ?)",
                                     (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), client_ip, username, password, 0, 0))
                 except sqlite3.Error as e:
-                    print(f"[!] Login log error: {e}")
+                    logger.error(f"Login log error: {e}", extra={'client_ip': client_ip, 'session_id': self.session_id})
                 trigger_alert(self.session_id, "Auth Failure", f"Failed login attempt for {username} from {client_ip}", client_ip, "unknown")
                 return paramiko.AUTH_FAILED
         else:
@@ -1107,77 +1129,51 @@ class HoneypotSFTPServer(paramiko.SFTPServerInterface):
 
 def handle_client(client_socket, client_ip, is_sftp=False):
     session_id = uuid.uuid4().int & 0xFFFFFFFF
-    print(f"[*] New {'SFTP' if is_sftp else 'SSH'} connection from {client_ip} - Session ID: {session_id}")
+    logger.info(f"New {'SFTP' if is_sftp else 'SSH'} connection from {client_ip}", extra={'client_ip': client_ip, 'session_id': session_id})
     trigger_alert(session_id, "New Connection", f"New {'SFTP' if is_sftp else 'SSH'} client connection from {client_ip}", client_ip, "unknown")
 
     try:
         with sqlite3.connect(DB_NAME) as conn:
             conn.execute("INSERT INTO login_attempts (timestamp, ip, username, password, success, redirected) VALUES (?, ?, ?, ?, ?, ?)",
                         (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), client_ip, "unknown", "", 0, 0))
-    except sqlite3.Error as e:
-        print(f"[!] Login attempt log error: {e}")
 
-    transport = paramiko.Transport(client_socket)
-    chan = None
-    try:
-        transport.add_server_key(paramiko.RSAKey.generate(2048))
-        transport.load_server_moduli()
-        server = HoneypotSSHServer() if not is_sftp else None
-        server.session_id = session_id
+        transport = paramiko.Transport(client_socket)
+        server = HoneypotSSHServer()
         server.set_transport(transport)
-
-        if not is_sftp:
-            try:
-                transport.start_server(server=server)
-                chan = transport.accept(20)
-                if chan is None:
-                    print(f"[!] No channel for {client_ip}")
-                    return
-                chan.send(SSH_BANNER.encode() + b"\r\n")
-                chan.send(b"Welcome to Server SSH\r\n")
-            except paramiko.SSHException as e:
-                print(f"[!] SSH handshake failed for {client_ip}: {e}")
-                return
+        server.session_id = session_id
+        server.client_ip = client_ip
+        if is_sftp:
+            transport.add_server_key(paramiko.RSAKey.from_private_key_file("key.pem"))
+            transport.set_subsystem_handler("sftp", paramiko.SFTPServer, HoneypotSFTPServer, server)
         else:
-            try:
-                transport.set_subsystem_handler("sftp", paramiko.SFTPServer, HoneypotSFTPServer, server)
-                transport.start_server(server=HoneypotSFTPServer(server))
-            except paramiko.SSHException as e:
-                print(f"[!] SFTP handshake failed for {client_ip}: {e}")
-                return
+            transport.add_server_key(paramiko.RSAKey.from_private_key_file("key.pem"))
+            transport.start_server(server=server)
 
-        username = None
-        password = None
-        current_dir = "/"
+        chan = transport.accept(20)
+        if chan is None:
+            logger.warning("No channel accepted", extra={'client_ip': client_ip, 'session_id': session_id})
+            return
+
+        username = server.username
+        password = server.password
+        current_dir = PREDEFINED_USERS.get(username, {}).get("home", "/") if username else "/"
         session_log = []
         command_history = []
         jobs = []
         cmd_count = 0
-        attacker_os = detect_attacker_os(client_ip, transport)
+
+        # Prompt dynamique avec date/heure actuelles
+        prompt = f"{username}@{socket.gethostname().split('.')[0]}:{current_dir} 11:43 PM CEST, Sat Jun 14, 2025$ ".encode() if username else b"guest@honeypot:/ 11:43 PM CEST, Sat Jun 14, 2025$ "
 
         while True:
-            with _connection_lock:
-                if client_ip in _connection_count and _connection_count[client_ip] > CONNECTION_LIMIT_PER_IP:
-                    if not is_sftp and chan:
-                        chan.send(b"Too many connections from this IP. Try again later.\r\n")
-                        chan.flush()
-                    break
-                _connection_count[client_ip] = _connection_count.get(client_ip, 0) + 1
-
-            if not is_sftp:
-                prompt = f"\033[32m{username or 'unknown'}\033[0m@{client_ip} [{datetime.now().strftime('%H:%M:%S')}]:{current_dir}$ " if username else f"\033[31munknown\033[0m@{client_ip} [{datetime.now().strftime('%H:%M:%S')}]:(login)$ "
-                try:
-                    cmd, current_dir, jobs, cmd_count, exit_flag = read_line_advanced(chan, prompt.encode(), command_history, current_dir, username, FS, sessionlog, session_id, client_ip, jobs, cmd_count, transport)
-                    if exit_flag:
-                        break
-                except Exception as e:
-                    print(f"[!] Error in command processing: {e}")
-                    chan.send(b"Error processing command.\r\n")
-            else:  # SFTP handling
-                transport.accept(20)  # Keep SFTP connection alive
-                # SFTP operations are handled by HoneypotSFTPServer
+            cmd, current_dir, jobs, cmd_count, exit_flag = read_line_advanced(chan, prompt, command_history, current_dir, username, FS, session_log, session_id, client_ip, jobs, cmd_count, transport)
+            if exit_flag:
+                break
+        else:  # SFTP handling
+            transport.accept(20)  # Keep SFTP connection alive
+            # SFTP operations are handled by HoneypotSFTPServer
     except Exception as e:
-        print(f"[!] Error in handle_client: {e}")
+        logger.error(f"Error in handle_client: {e}", extra={'client_ip': client_ip, 'session_id': session_id})
     finally:
         with _connection_lock:
             if client_ip in _connection_count:
@@ -1187,6 +1183,7 @@ def handle_client(client_socket, client_ip, is_sftp=False):
         if transport:
             transport.close()
         client_socket.close()
+        logger.info(f"{'SFTP' if is_sftp else 'SSH'} session ended for {client_ip}", extra={'client_ip': client_ip, 'session_id': session_id})
 
 def start_server():
     global FS
@@ -1201,13 +1198,13 @@ def start_server():
     ssh_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     ssh_server.bind((HOST, PORT))
     ssh_server.listen(5)
-    print(f"[*] SSH Honeypot listening on {HOST}:{PORT}")
+    logger.info(f"SSH Honeypot listening on {HOST}:{PORT}", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
 
     sftp_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sftp_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sftp_server.bind((HOST, SFTP_PORT))
     sftp_server.listen(5)
-    print(f"[*] SFTP Honeypot listening on {HOST}:{SFTP_PORT}")
+    logger.info(f"SFTP Honeypot listening on {HOST}:{SFTP_PORT}", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
 
     # Start background threads
     threading.Thread(target=cleanup_bruteforce_attempts, daemon=True).start()
@@ -1218,9 +1215,22 @@ def start_server():
     while True:
         client_socket, addr = ssh_server.accept()
         client_ip = addr[0]
+        with _connection_lock:
+            _connection_count[client_ip] = _connection_count.get(client_ip, 0) + 1
+            if _connection_count[client_ip] > CONNECTION_LIMIT_PER_IP:
+                client_socket.close()
+                trigger_alert(None, "Connection Limit Exceeded", f"IP {client_ip} exceeded connection limit", client_ip, "unknown")
+                continue
         threading.Thread(target=handle_client, args=(client_socket, client_ip, False), daemon=True).start()
+
         client_socket, addr = sftp_server.accept()
         client_ip = addr[0]
+        with _connection_lock:
+            _connection_count[client_ip] = _connection_count.get(client_ip, 0) + 1
+            if _connection_count[client_ip] > CONNECTION_LIMIT_PER_IP:
+                client_socket.close()
+                trigger_alert(None, "Connection Limit Exceeded", f"IP {client_ip} exceeded connection limit", client_ip, "unknown")
+                continue
         threading.Thread(target=handle_client, args=(client_socket, client_ip, True), daemon=True).start()
 
 if __name__ == "__main__":
