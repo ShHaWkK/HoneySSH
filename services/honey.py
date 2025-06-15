@@ -62,7 +62,6 @@ SMTP_USER = os.getenv("SMTP_USER", "honeycute896@gmail.com")
 SMTP_PASS = os.getenv("SMTP_PASS", "jawm fmcm dmaf qkyl")
 ALERT_FROM = SMTP_USER
 ALERT_TO = os.getenv("ALERT_TO", "alexandreuzan75@gmail.com")
-
 PREDEFINED_USERS = {
     "admin": {
         "home": "/home/admin",
@@ -150,6 +149,13 @@ COMMAND_OPTIONS = {
     "ping": ["-c", "-i"],
     "nmap": ["-sS", "-sV"]
 }
+
+# Colored prompt helper
+def color_prompt(username, client_ip, current_dir):
+    return (
+        f"\033[1;32m{username}@{client_ip}\033[0m:"
+        f"\033[1;34m{current_dir}\033[0m$ "
+    )
 
 # Données dynamiques
 @lru_cache(maxsize=10)
@@ -1183,7 +1189,20 @@ def handle_connection(client, addr, server_key):
         cmd_count = 0
 
         while True:
-            input_line, jobs, cmd_count = read_line_advanced(chan, f"{username}@{client_ip}:{current_dir}$ ", history, current_dir, username, FS, session_log, session_id, client_ip, jobs, cmd_count)
+            prompt_str = color_prompt(username, client_ip, current_dir)
+            input_line, jobs, cmd_count = read_line_advanced(
+                chan,
+                prompt_str,
+                history,
+                current_dir,
+                username,
+                FS,
+                session_log,
+                session_id,
+                client_ip,
+                jobs,
+                cmd_count,
+            )
             if not input_line:  # Vérifie si la connexion est interrompue
                 break
             output, current_dir, jobs, cmd_count, terminate = process_command(input_line, current_dir, username, FS, client_ip, session_id, session_log, history, chan, jobs, cmd_count)
