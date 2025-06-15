@@ -379,6 +379,17 @@ def cleanup_trap_files():
         time.sleep(TRAP_CLEANUP_INTERVAL)
         logger.info("Trap files cleaned up", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
 
+def cleanup_bruteforce_attempts():
+    global _brute_force_attempts, _brute_force_alerted, _scan_attempts
+    while True:
+        with _brute_force_lock:
+            now = time.time()
+            _brute_force_attempts = {k: [t for t in v if now - t < BRUTE_FORCE_WINDOW] for k, v in _brute_force_attempts.items()}
+            _brute_force_alerted = {k for k in _brute_force_alerted if k in _brute_force_attempts and _brute_force_attempts[k]}
+            _scan_attempts = {k: [t for t in v if now - t < 60] for k, v in _scan_attempts.items()}
+        time.sleep(60)
+        logger.info("Bruteforce and scan attempts cleaned up", extra={'client_ip': 'N/A', 'session_id': 'N/A'})
+
 def calculate_risk_score(commands):
     score = 0
     patterns = {
