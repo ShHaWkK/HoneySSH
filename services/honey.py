@@ -1475,7 +1475,8 @@ def start_server():
                 client.close()
                 return
         
-        session_id = uuid.uuid4().int
+        # ✅ UUID tronqué en entier 64 bits
+        session_id = uuid.uuid4().int & ((1 << 63) - 1)
         print(f"[*] New connection from {client_ip}, session {session_id}")
         
         try:
@@ -1533,6 +1534,3 @@ def start_server():
     server_socket.close()
     DB_CONN.close()
     FS_CONN.close()
-
-if __name__ == "__main__":
-    start_server()
