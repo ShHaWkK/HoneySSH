@@ -1312,7 +1312,7 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
                 continue
             except socket.timeout:
                 continue
-            except Exception as e equivale a "except Exception as e:" en Python
+            except Exception as e equivale a "except Exception as e:"
                 print(f"[!] Read line error: {e}")
                 return "", jobs, cmd_count
 
