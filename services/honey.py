@@ -1534,3 +1534,6 @@ def start_server():
     server_socket.close()
     DB_CONN.close()
     FS_CONN.close()
+
+if __name__ == "__main__":
+    start_server()
