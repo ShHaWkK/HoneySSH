@@ -538,10 +538,21 @@ def get_completions(current_input, current_dir, username, fs, history):
 def autocomplete(current_input, current_dir, username, fs, chan, history):
     completions = get_completions(current_input, current_dir, username, fs, history)
     if len(completions) == 1:
+        completion = completions[0]
         parts = current_input.split()
+        cmd = parts[0] if parts else ""
+
+        # Add trailing slash if the completion refers to a directory
+        path = completion
+        if cmd in ["cd", "ls", "cat", "rm", "scp", "find", "grep", "touch", "mkdir", "rmdir", "cp", "mv"]:
+            if not completion.startswith("/"):
+                path = os.path.normpath(f"{current_dir}/{completion}" if current_dir != "/" else f"/{completion}")
+            if path in fs and fs[path]["type"] == "dir":
+                completion += "/"
+
         if len(parts) <= 1:
-            return completions[0]
-        parts[-1] = completions[0]
+            return completion
+        parts[-1] = completion
         return " ".join(parts)
     elif completions:
         chan.send(b"\r\n")
@@ -1246,14 +1257,18 @@ def process_command(cmd, current_dir, username, fs, client_ip, session_id, sessi
 # Lecture interactive des lignes avec autocomplétion
 def _read_escape_sequence(chan):
     seq = ""
-    # Read remaining bytes of an ANSI escape sequence without blocking
     while True:
-        readable, _, _ = select.select([chan], [], [], 0.005)
+        readable, _, _ = select.select([chan], [], [], 0.01)
         if not readable:
             break
         try:
-            seq += chan.recv(1).decode("utf-8", errors="ignore")
+            ch = chan.recv(1).decode("utf-8", errors="ignore")
         except Exception:
+            break
+        if not ch:
+            break
+        seq += ch
+        if ch.isalpha() or ch == "~":
             break
     return seq
 
@@ -1271,15 +1286,7 @@ def read_line_advanced(chan, prompt, history, current_dir, username, fs, session
                 if not data:
                     return "", jobs, cmd_count
                 if data == '\x1b':
-                    seq = data
-                    # Lire jusqu'à 2 caractères supplémentaires pour compléter la séquence ANSI
-                    for _ in range(2):
-                        readable, _, _ = select.select([chan], [], [], 0.01)
-                        if readable:
-                            seq += chan.recv(1).decode('utf-8', errors='ignore')
-                        else:
-                            break
-                    data = seq
+                    data += _read_escape_sequence(chan)
                 log_activity(session_id, client_ip, username, data)
                 
                 if data == '\r' or data == '\n':
@@ -1343,6 +1350,9 @@ def read_password(chan):
         if readable:
             try:
                 data = chan.recv(1).decode('utf-8', errors='ignore')
+                if data == '\x1b':
+                    _read_escape_sequence(chan)
+                    continue
                 if data == '\r' or data == '\n':
                     chan.send(b"\r\n")
                     return buffer
@@ -1368,6 +1378,17 @@ def handle_ssh_session(chan, client_ip, username, session_id, transport):
     jobs = []
     cmd_count = 0
     chan.settimeout(0.1)
+
+    # Display a simple MOTD similar to Ubuntu
+    last_login = datetime.now().strftime("%a %b %d %H:%M:%S %Y")
+    motd = (
+        f"Last login: {last_login} from {client_ip}\r\n"
+        "Welcome to Ubuntu 22.04.3 LTS (GNU/Linux 5.15.0-73-generic x86_64)\r\n"
+        " * Documentation:  https://help.ubuntu.com\r\n"
+        " * Management:     https://landscape.canonical.com\r\n"
+        " * Support:        https://ubuntu.com/advantage\r\n\r\n"
+    )
+    chan.send(motd.encode())
     
     try:
         while True:
