@@ -196,7 +196,17 @@ COMMAND_OPTIONS = {
     "wget": ["-O", "-q", "--help"],
     "telnet": [],
     "ping": ["-c", "-i"],
-    "nmap": ["-sS", "-sV"]
+    "nmap": ["-sS", "-sV"],
+    "man": ["--help", "-k", "-f"]
+}
+
+# Minimal manual pages for built-in commands
+MAN_PAGES = {
+    "ls": """LS(1)\nNAME\n    ls - list directory contents\n\nSYNOPSIS\n    ls [OPTION]... [FILE]...\n\nDESCRIPTION\n    List information about the FILEs (the current directory by default).""",
+    "cd": """CD(1)\nNAME\n    cd - change the shell working directory\n\nSYNOPSIS\n    cd [DIRECTORY]\n\nDESCRIPTION\n    Change the current directory to DIRECTORY.""",
+    "pwd": """PWD(1)\nNAME\n    pwd - print name of current working directory\n\nSYNOPSIS\n    pwd\n\nDESCRIPTION\n    Display the full pathname of the current directory.""",
+    "man": """MAN(1)\nNAME\n    man - an interface to the system reference manuals\n\nSYNOPSIS\n    man [COMMAND]\n\nDESCRIPTION\n    Display the manual page for COMMAND.""",
+    "who": """WHO(1)\nNAME\n    who - show who is logged on\n\nSYNOPSIS\n    who\n\nDESCRIPTION\n    List logged in users.""",
 }
 
 # Colored prompt helper
@@ -302,7 +312,7 @@ def get_dynamic_messages():
             f"{service}: Suspicious activity on port {random.randint(1024, 65535)}"
         ])
         lines.append(f"{timestamp} debian {message}")
-    return "\n".join(lines)
+    return "\r\n".join(lines)
 
 @lru_cache(maxsize=10)
 def get_dynamic_dmesg():
@@ -316,7 +326,7 @@ def get_dynamic_dmesg():
             "kernel: ACPI: Power Button [PWRB]"
         ])
         lines.append(f"{timestamp} {message}")
-    return "\n".join(lines)
+    return "\r\n".join(lines)
 
 @lru_cache(maxsize=10)
 def get_dynamic_network_scan():
@@ -326,7 +336,7 @@ def get_dynamic_network_scan():
             port = FAKE_SERVICES.get(service, 0)
             if port:
                 lines.append(f"{ip}:{port} open {service}")
-    return "\n".join(lines)
+    return "\r\n".join(lines)
 
 @lru_cache(maxsize=10)
 def get_dynamic_arp():
@@ -334,7 +344,7 @@ def get_dynamic_arp():
     for ip in FAKE_NETWORK_HOSTS:
         mac = ":".join([f"{random.randint(0, 255):02x}" for _ in range(6)])
         lines.append(f"{ip:<24} ether   {mac}   C                     eth0")
-    return "\n".join(lines)
+    return "\r\n".join(lines)
 
 @lru_cache(maxsize=10)
 def get_dynamic_who():
@@ -345,7 +355,7 @@ def get_dynamic_who():
         tty = random.choice(["pts/0", "pts/1", "tty7"])
         host = f"192.168.1.{random.randint(10, 50)}"
         lines.append(f"{user:<10} {tty:<8} {timestamp} {host}")
-    return "\n".join(lines)
+    return "\r\n".join(lines)
 
 @lru_cache(maxsize=10)
 def get_dynamic_w():
@@ -437,6 +447,17 @@ BASE_FILE_SYSTEM = {
     "/dev": {"type": "dir", "contents": ["null", "zero"], "owner": "root", "permissions": "rwxr-xr-x", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
     "/dev/null": {"type": "file", "content": get_dev_null, "owner": "root", "permissions": "rw-rw-rw-", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
     "/dev/zero": {"type": "file", "content": get_dev_zero, "owner": "root", "permissions": "rw-rw-rw-", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+    "/home": {"type": "dir", "contents": [], "owner": "root", "permissions": "rwxr-xr-x", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+    "/usr": {"type": "dir", "contents": ["bin", "local"], "owner": "root", "permissions": "rwxr-xr-x", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+    "/usr/bin": {"type": "dir", "contents": ["python3", "man"], "owner": "root", "permissions": "rwxr-xr-x", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+    "/usr/bin/python3": {"type": "file", "content": "#!/usr/bin/python3\n", "owner": "root", "permissions": "rwxr-xr-x", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+    "/usr/bin/man": {"type": "file", "content": "#!/bin/sh\necho 'Use the built-in man command'\n", "owner": "root", "permissions": "rwxr-xr-x", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+    "/usr/local": {"type": "dir", "contents": ["bin"], "owner": "root", "permissions": "rwxr-xr-x", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+    "/usr/local/bin": {"type": "dir", "contents": [], "owner": "root", "permissions": "rwxr-xr-x", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+    "/lib": {"type": "dir", "contents": [], "owner": "root", "permissions": "rwxr-xr-x", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+    "/sys": {"type": "dir", "contents": [], "owner": "root", "permissions": "rwxr-xr-x", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+    "/root": {"type": "dir", "contents": [".bashrc"], "owner": "root", "permissions": "rwx------", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+    "/root/.bashrc": {"type": "file", "content": "# .bashrc\n", "owner": "root", "permissions": "rw-r--r--", "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
 }
 
 def populate_predefined_users(fs):
@@ -485,6 +506,7 @@ def get_completions(current_input, current_dir, username, fs, history):
         "telnet",
         "ping",
         "nmap",
+        "man",
         "arp",
         "scp",
         "sftp",
@@ -641,7 +663,18 @@ def log_activity(session_id, client_ip, username, key):
     elif KEY_DISPLAY_MODE == 'filtered':
         print(f"\033[95m[KEY]\033[0m {username}@{client_ip}: {repr(key)}")
 
-def log_session_activity(session_id, client_ip, username, command_line, output):
+def log_session_activity(
+    session_id,
+    client_ip,
+    username,
+    command_line,
+    output,
+    success=None,
+    cwd=None,
+    cmd_index=None,
+    start_time=None,
+    end_time=None,
+):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_entry = {
         "event": "command",
@@ -652,8 +685,34 @@ def log_session_activity(session_id, client_ip, username, command_line, output):
         "command": command_line,
         "output": output,
     }
+    if cwd is not None:
+        log_entry["cwd"] = cwd
+    if cmd_index is not None:
+        log_entry["index"] = cmd_index
+    if start_time is not None:
+        log_entry["start_time"] = start_time
+    if end_time is not None:
+        log_entry["end_time"] = end_time
+        if start_time is not None:
+            duration_ms = (
+                datetime.fromisoformat(end_time) - datetime.fromisoformat(start_time)
+            ).total_seconds() * 1000
+            log_entry["duration_ms"] = int(duration_ms)
+    if success is not None:
+        log_entry["success"] = success
     LOGGER.info(json.dumps(log_entry))
-    print(f"\033[96m[SESSION]\033[0m {timestamp} {username}@{client_ip}: {command_line} -> {output}")
+    if success is None:
+        status_text = "in-progress"
+    else:
+        status_text = "success" if success else "failure"
+    duration_msg = ""
+    if "duration_ms" in log_entry:
+        duration_msg = f", {log_entry['duration_ms']}ms"
+    index_msg = f"#{cmd_index} " if cmd_index is not None else ""
+    cwd_msg = f"[{cwd}] " if cwd is not None else ""
+    print(
+        f"\033[96m[SESSION]\033[0m {timestamp} {username}@{client_ip} {cwd_msg}{index_msg}{command_line} -> {output} ({status_text}{duration_msg})"
+    )
 
 # Détection de bruteforce
 def check_bruteforce(client_ip, username, password):
@@ -864,7 +923,7 @@ def _format_ls_columns(items, width=80):
         row = items[i:i + cols]
         padded = [it + " " * (max_len - _visible_len(it)) for it in row]
         lines.append("".join(padded))
-    return "\n".join(lines)
+    return "\r\n".join(lines)
 
 def ftp_session(chan, host, username, session_id, client_ip, session_log):
     history = []
@@ -874,7 +933,7 @@ def ftp_session(chan, host, username, session_id, client_ip, session_log):
     _, _, _ = read_line_advanced(chan, "", history, "", username, FS, session_log, session_id, client_ip, jobs, cmd_count)
     chan.send(b"331 Please specify the password.\r\nPassword: ")
     _, _, _ = read_line_advanced(chan, "", history, "", username, FS, session_log, session_id, client_ip, jobs, cmd_count)
-    chan.send(b"230 Login successful.\r\nftp> ")
+    chan.send(b"230 Login successful.\r\n")
     while True:
         ftp_cmd, _, _ = read_line_advanced(chan, "ftp> ", history, "", username, FS, session_log, session_id, client_ip, jobs, cmd_count)
         if not ftp_cmd or ftp_cmd.strip().lower() in ["quit", "exit", "bye"]:
@@ -903,7 +962,7 @@ def mysql_session(chan, username, session_id, client_ip, session_log):
     }
     chan.send(b"Welcome to the MySQL monitor.  Commands end with ; or \g.\r\n")
     chan.send(b"Your MySQL connection id is 1\r\n")
-    chan.send(b"Server version: 5.7.42 MySQL Community Server (fake)\r\n\r\nmysql> ")
+    chan.send(b"Server version: 5.7.42 MySQL Community Server (fake)\r\n\r\n")
     current_db = None
     while True:
         mysql_cmd, _, _ = read_line_advanced(chan, "mysql> ", history, "", username, FS, session_log, session_id, client_ip, jobs, cmd_count)
@@ -964,7 +1023,6 @@ def process_command(cmd, current_dir, username, fs, client_ip, session_id, sessi
     arg_str = " ".join(cmd_parts[1:]) if len(cmd_parts) > 1 else ""
     jobs = jobs or []
     session_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {username}@{client_ip}: {cmd}")
-    log_session_activity(session_id, client_ip, username, cmd, output)
     command_seq = " ".join(command_history[-5:] + [cmd])
     malicious_patterns = {"rm -rf /": 10, "rm -rf": 8, "wget": 3, "curl": 3, "format": 7, "reboot": 4, "nc -l": 8, "exploit_db": 8, "metasploit": 8, "reverse_shell": 8, "whoami.*sudo": 6}
     risk_score = sum(malicious_patterns.get(pattern, 0) for pattern in malicious_patterns if pattern in command_seq.lower())
@@ -1189,7 +1247,7 @@ def process_command(cmd, current_dir, username, fs, client_ip, session_id, sessi
             output = "telnet: missing host"
         else:
             host = arg_str.split()[0]
-            output = f"Trying {host}...\nConnection refused"
+            output = f"Trying {host}...\r\nConnection refused"
             trigger_alert(session_id, "Telnet Attempt", f"Attempted telnet to {host}", client_ip, username)
     elif cmd_name == "scp":
         if not arg_str:
@@ -1277,6 +1335,34 @@ def process_command(cmd, current_dir, username, fs, client_ip, session_id, sessi
             else:
                 output = f"apt-get: unknown command '{arg_str}'"
             trigger_alert(session_id, "Package Manager Command", f"Executed apt-get: {cmd}", client_ip, username)
+    elif cmd_name == "man":
+        args = cmd_parts[1:]
+        if not args:
+            output = "What manual page do you want?"
+        elif "-k" in args:
+            try:
+                keyword = args[args.index("-k") + 1]
+            except IndexError:
+                keyword = ""
+            results = [f"{name} - {page.splitlines()[1].strip()}" for name, page in MAN_PAGES.items() if keyword.lower() in page.lower()]
+            output = "\n".join(results) if results else f"{keyword}: nothing appropriate."
+        elif "-f" in args:
+            keywords = args[args.index("-f") + 1:]
+            lines = []
+            for kw in keywords:
+                if kw in MAN_PAGES:
+                    desc = MAN_PAGES[kw].splitlines()[1].strip()
+                    lines.append(f"{kw}: {desc}")
+                else:
+                    lines.append(f"{kw}: nothing appropriate.")
+            output = "\n".join(lines)
+        else:
+            page = MAN_PAGES.get(args[0])
+            if page:
+                output = page
+            else:
+                output = f"No manual entry for {args[0]}"
+        trigger_alert(session_id, "Command Executed", f"Requested man page for {arg_str if arg_str else 'none'}", client_ip, username)
     elif cmd_name == "who":
         output = get_dynamic_who()
         trigger_alert(session_id, "Command Executed", "Displayed user list", client_ip, username)
@@ -1535,13 +1621,46 @@ def handle_ssh_session(chan, client_ip, username, session_id, transport):
             )
             if not cmd or cmd == "exit":
                 break
-            
+
+            command_index = cmd_count + 1
+            start_time = datetime.now().isoformat()
+            log_session_activity(
+                session_id,
+                client_ip,
+                username,
+                cmd,
+                "",
+                success=None,
+                cwd=current_dir,
+                cmd_index=command_index,
+                start_time=start_time,
+            )
+
             output, current_dir, jobs, cmd_count, should_exit = process_command(
                 cmd, current_dir, username, FS, client_ip, session_id, session_log,
                 history, chan, jobs, cmd_count
             )
             if output:
-                chan.send((output + "\r\n").encode())
+                # Normalize line endings to avoid duplicated carriage returns
+                formatted = output.replace("\r\n", "\n").replace("\r", "\n")
+                formatted = formatted.rstrip("\n")
+                formatted = formatted.replace("\n", "\r\n") + "\r\n"
+                chan.send(formatted.encode())
+            error_keywords = ["not found", "no such file", "permission denied", "error", "failed", "missing"]
+            success = not any(k in output.lower() for k in error_keywords)
+            end_time = datetime.now().isoformat()
+            log_session_activity(
+                session_id,
+                client_ip,
+                username,
+                cmd,
+                output,
+                success,
+                cwd=current_dir,
+                cmd_index=command_index,
+                start_time=start_time,
+                end_time=end_time,
+            )
             if should_exit:
                 break
             
