@@ -27,7 +27,6 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import hashlib
 import string
-import ipapi
 from io import StringIO
 
 # Configuration
@@ -1377,15 +1376,7 @@ def modify_file(fs, path, content, username, session_id, client_ip):
 def trigger_alert(session_id, event_type, details, client_ip, username):
     """Declenche une alerte et envoie un email si configure."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-    geo_info = "Unknown"
-    try:
-        geo_data = ipapi.location(client_ip)
-        geo_info = (
-            f"{geo_data.get('city', 'Unknown')}, {geo_data.get('country', 'Unknown')}"
-        )
-    except Exception:
-        pass
-    details = f"{details} (Geo: {geo_info})"
+    
     print(
         f"\033[91m[ALERT]\033[0m {timestamp} {client_ip} {username}: {event_type} - {details}"
     )
@@ -1403,7 +1394,6 @@ def trigger_alert(session_id, event_type, details, client_ip, username):
                 f"- Utilisateur      : {username}\n"
                 f"- Adresse IP       : {client_ip}\n"
                 f"- Heure exacte     : {timestamp}\n"
-                f"- Géolocalisation  : {geo_info}\n"
                 f"- Session ID       : {session_id}\n\n"
                 f"Détails : {details}"
             )
