@@ -132,6 +132,7 @@ AVAILABLE_COMMANDS = [
     "kubectl",
     "helm",
     "docker-compose",
+    "iptables",
     "exit",
     "quit",
 ]
@@ -208,6 +209,11 @@ FAKE_SERVICES = {
     "telnet": 23,
 }
 
+# Simple list of iptables rules for the simulated firewall
+IPTABLES_RULES = [
+    {"chain": "INPUT", "rule": "-p tcp --dport 22 -j ACCEPT"},
+]
+
 # Identifiants SMTP via variables d'environnement
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
@@ -271,6 +277,8 @@ FAKE_NETWORK_HOSTS = {
     "192.168.1.10": {"name": "webserver.local", "services": ["http", "https"]},
     "192.168.1.20": {"name": "dbserver.local", "services": ["mysql"]},
     "192.168.1.30": {"name": "backup.local", "services": ["ftp"]},
+    "8.8.8.8": {"name": "dns.google", "services": []},
+    "1.1.1.1": {"name": "cloudflare-dns.com", "services": []},
 }
 
 # Jeu de données MySQL fictif pour le sous-système SQL
@@ -359,6 +367,7 @@ COMMAND_OPTIONS = {
     "kubectl": ["get", "describe"],
     "helm": ["list"],
     "docker-compose": ["up", "down"],
+    "iptables": ["-L", "-A", "-D", "-I"],
 }
 
 # Minimal manual pages for built-in commands
@@ -1814,18 +1823,19 @@ def _random_permissions():
 
 
 def ftp_session(chan, host, username, session_id, client_ip, session_log):
-    """Emule une session FTP interactive."""
+    """Emule une session FTP interactive avancee."""
     history = []
     jobs = []
     cmd_count = 0
+    current_dir = PREDEFINED_USERS.get(username, {}).get("home", "/")
     chan.send(
         f"Connected to {host}.\r\n220 (vsFTPd 3.0.3)\r\nName ({host}:{username}): ".encode()
     )
-    _, _, _ = read_line_advanced(
+    read_line_advanced(
         chan,
         "",
         history,
-        "",
+        current_dir,
         username,
         FS,
         session_log,
@@ -1835,11 +1845,11 @@ def ftp_session(chan, host, username, session_id, client_ip, session_log):
         cmd_count,
     )
     chan.send(b"331 Please specify the password.\r\nPassword: ")
-    _, _, _ = read_line_advanced(
+    read_line_advanced(
         chan,
         "",
         history,
-        "",
+        current_dir,
         username,
         FS,
         session_log,
@@ -1848,13 +1858,15 @@ def ftp_session(chan, host, username, session_id, client_ip, session_log):
         jobs,
         cmd_count,
     )
-    chan.send(b"230 Login successful.\r\n")
+    chan.send(
+        b"230 Login successful.\r\nRemote system type is UNIX.\r\nUsing binary mode to transfer files.\r\n"
+    )
     while True:
         ftp_cmd, _, _ = read_line_advanced(
             chan,
             "ftp> ",
             history,
-            "",
+            current_dir,
             username,
             FS,
             session_log,
@@ -1863,18 +1875,137 @@ def ftp_session(chan, host, username, session_id, client_ip, session_log):
             jobs,
             cmd_count,
         )
-        if not ftp_cmd or ftp_cmd.strip().lower() in ["quit", "exit", "bye"]:
+        if not ftp_cmd:
+            continue
+        parts = ftp_cmd.strip().split()
+        if not parts:
+            continue
+        command = parts[0].lower()
+        args = parts[1:]
+        if command in ["quit", "exit", "bye"]:
             chan.send(b"221 Goodbye.\r\n")
             break
-        elif ftp_cmd.strip().lower() == "ls":
-            chan.send(b"200 Here comes the directory listing.\r\n")
-            chan.send(b"-rw-r--r-- 1 user group 0 Jan 01 00:00 file.txt\r\n")
-        elif ftp_cmd.strip().lower().startswith(
-            "get"
-        ) or ftp_cmd.strip().lower().startswith("put"):
-            chan.send(b"200 Command okay.\r\n")
+        elif command in ["pwd"]:
+            chan.send(f'257 "{current_dir}" is the current directory\r\n'.encode())
+        elif command in ["cd", "cwd"]:
+            dest = args[0] if args else "/"
+            path = os.path.normpath(dest if dest.startswith("/") else f"{current_dir}/{dest}")
+            if path in FS and FS[path]["type"] == "dir":
+                current_dir = path
+                chan.send(b"250 Directory successfully changed.\r\n")
+            else:
+                chan.send(b"550 Failed to change directory.\r\n")
+        elif command == "ls":
+            if current_dir in FS and FS[current_dir]["type"] == "dir":
+                long_listing = "-l" in args
+                for item in FS[current_dir]["contents"]:
+                    item_path = (
+                        f"{current_dir}/{item}" if current_dir != "/" else f"/{item}"
+                    )
+                    if long_listing and item_path in FS:
+                        entry = FS[item_path]
+                        perms = entry.get("permissions", "rwxr-xr-x")
+                        owner = entry.get("owner", "root")
+                        size = (
+                            len(entry.get("content", ""))
+                            if entry.get("type") == "file"
+                            else 4096
+                        )
+                        mtime = entry.get("mtime", "")
+                        chan.send(
+                            f"{perms} 1 {owner} {owner} {size} {mtime} {item}\r\n".encode()
+                        )
+                    else:
+                        chan.send(f"{item}\r\n".encode())
+            chan.send(b"226 Directory send OK.\r\n")
+        elif command == "get" and args:
+            target = os.path.normpath(
+                args[0] if args[0].startswith("/") else f"{current_dir}/{args[0]}"
+            )
+            if target in FS and FS[target]["type"] == "file":
+                content = FS[target]["content"]
+                if callable(content):
+                    content = content()
+                chan.send(b"150 Opening data connection.\r\n")
+                chan.send(str(content).encode() + b"\r\n")
+                chan.send(b"226 Transfer complete.\r\n")
+            else:
+                chan.send(b"550 Failed to open file.\r\n")
+        elif command == "put" and args:
+            dest = os.path.normpath(
+                args[0] if args[0].startswith("/") else f"{current_dir}/{args[0]}"
+            )
+            FS[dest] = {
+                "type": "file",
+                "content": "",
+                "owner": username,
+                "permissions": "rw-r--r--",
+                "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            parent = os.path.dirname(dest) or "/"
+            name = os.path.basename(dest)
+            if parent in FS and name not in FS[parent]["contents"]:
+                FS[parent]["contents"].append(name)
+            chan.send(b"150 Ok to send data.\r\n226 Transfer complete.\r\n")
+        elif command == "mkdir" and args:
+            new_dir = os.path.normpath(
+                args[0] if args[0].startswith("/") else f"{current_dir}/{args[0]}"
+            )
+            if new_dir not in FS:
+                FS[new_dir] = {
+                    "type": "dir",
+                    "contents": [],
+                    "owner": username,
+                    "permissions": "rwxr-xr-x",
+                    "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                parent = os.path.dirname(new_dir) or "/"
+                name = os.path.basename(new_dir)
+                if parent in FS and name not in FS[parent]["contents"]:
+                    FS[parent]["contents"].append(name)
+                chan.send(b"257 Directory created.\r\n")
+            else:
+                chan.send(b"550 Create directory operation failed.\r\n")
+        elif command in ["delete", "rm"] and args:
+            target = os.path.normpath(
+                args[0] if args[0].startswith("/") else f"{current_dir}/{args[0]}"
+            )
+            if target in FS:
+                parent = os.path.dirname(target) or "/"
+                name = os.path.basename(target)
+                FS.pop(target)
+                if parent in FS and name in FS[parent]["contents"]:
+                    FS[parent]["contents"].remove(name)
+                chan.send(b"250 Delete operation successful.\r\n")
+            else:
+                chan.send(b"550 Delete operation failed.\r\n")
+        elif command == "rename" and len(args) >= 2:
+            src = os.path.normpath(
+                args[0] if args[0].startswith("/") else f"{current_dir}/{args[0]}"
+            )
+            dest = os.path.normpath(
+                args[1] if args[1].startswith("/") else f"{current_dir}/{args[1]}"
+            )
+            if src in FS:
+                FS[dest] = FS.pop(src)
+                src_parent = os.path.dirname(src) or "/"
+                dest_parent = os.path.dirname(dest) or "/"
+                src_name = os.path.basename(src)
+                dest_name = os.path.basename(dest)
+                if src_parent in FS and src_name in FS[src_parent]["contents"]:
+                    FS[src_parent]["contents"].remove(src_name)
+                if dest_parent in FS and dest_name not in FS[dest_parent]["contents"]:
+                    FS[dest_parent]["contents"].append(dest_name)
+                chan.send(b"250 Rename successful.\r\n")
+            else:
+                chan.send(b"550 File not found.\r\n")
+        elif command == "help":
+            chan.send(
+                b"Commands: ls, cd, pwd, get, put, mkdir, delete, rename, quit\r\n"
+            )
         else:
             chan.send(b"502 Command not implemented.\r\n")
+        session_log.append(f"FTP command: {ftp_cmd}")
     session_log.append(f"FTP session to {host} closed")
 
 
@@ -1978,6 +2109,76 @@ def mysql_session(chan, username, session_id, client_ip, session_log):
                     chan.send(b"Empty set (0.00 sec)\r\n")
             else:
                 chan.send(b"Query OK, 0 rows affected (0.00 sec)\r\n")
+        elif cmd_l.startswith("insert"):
+            m = re.match(r"insert\s+into\s+([\w\.]+)\s+values\s*\((.+)\)", mysql_cmd, re.I)
+            if m:
+                tbl = m.group(1)
+                values = [v.strip().strip("'\"") for v in m.group(2).split(',')]
+                db = current_db
+                if '.' in tbl:
+                    db, tbl = tbl.split('.', 1)
+                if db in FAKE_MYSQL_DATA and tbl in FAKE_MYSQL_DATA[db]:
+                    FAKE_MYSQL_DATA[db][tbl]["rows"].append(tuple(values))
+                    chan.send(b"Query OK, 1 row affected (0.00 sec)\r\n")
+                else:
+                    chan.send(b"ERROR 1146 (42S02): Table doesn't exist\r\n")
+            else:
+                chan.send(b"ERROR in INSERT syntax\r\n")
+        elif cmd_l.startswith("update") and "set" in cmd_l:
+            m = re.match(r"update\s+([\w\.]+)\s+set\s+(.+)\s+where\s+(.+)", mysql_cmd, re.I)
+            if m:
+                tbl = m.group(1)
+                set_clause = m.group(2)
+                where_clause = m.group(3)
+                db = current_db
+                if '.' in tbl:
+                    db, tbl = tbl.split('.', 1)
+                if db in FAKE_MYSQL_DATA and tbl in FAKE_MYSQL_DATA[db]:
+                    rows = FAKE_MYSQL_DATA[db][tbl]['rows']
+                    match = re.search(r'id\s*=\s*(\d+)', where_clause, re.I)
+                    affected = 0
+                    if match:
+                        rid = match.group(1)
+                        set_match = re.match(r"(\w+)\s*=\s*'?([^']*)'?", set_clause)
+                        if set_match:
+                            col = set_match.group(1)
+                            val = set_match.group(2)
+                            if col in FAKE_MYSQL_DATA[db][tbl]['columns']:
+                                idx = FAKE_MYSQL_DATA[db][tbl]['columns'].index(col)
+                                for i, r in enumerate(rows):
+                                    if str(r[0]) == rid:
+                                        lst = list(r)
+                                        lst[idx] = val
+                                        rows[i] = tuple(lst)
+                                        affected = 1
+                                        break
+                    chan.send(f"Query OK, {affected} row affected (0.00 sec)\r\n".encode())
+                else:
+                    chan.send(b"ERROR 1146 (42S02): Table doesn't exist\r\n")
+            else:
+                chan.send(b"ERROR in UPDATE syntax\r\n")
+        elif cmd_l.startswith("delete") and "from" in cmd_l:
+            m = re.match(r"delete\s+from\s+([\w\.]+)\s+where\s+(.+)", mysql_cmd, re.I)
+            if m:
+                tbl = m.group(1)
+                where_clause = m.group(2)
+                db = current_db
+                if '.' in tbl:
+                    db, tbl = tbl.split('.', 1)
+                if db in FAKE_MYSQL_DATA and tbl in FAKE_MYSQL_DATA[db]:
+                    rows = FAKE_MYSQL_DATA[db][tbl]['rows']
+                    match = re.search(r'id\s*=\s*(\d+)', where_clause, re.I)
+                    affected = 0
+                    if match:
+                        rid = match.group(1)
+                        new_rows = [r for r in rows if str(r[0]) != rid]
+                        affected = len(rows) - len(new_rows)
+                        FAKE_MYSQL_DATA[db][tbl]['rows'] = new_rows
+                    chan.send(f"Query OK, {affected} row affected (0.00 sec)\r\n".encode())
+                else:
+                    chan.send(b"ERROR 1146 (42S02): Table doesn't exist\r\n")
+            else:
+                chan.send(b"ERROR in DELETE syntax\r\n")
         else:
             chan.send(b"Query OK, 0 rows affected (0.00 sec)\r\n")
     session_log.append("MySQL session closed")
@@ -2476,16 +2677,10 @@ def process_command(
             output = "ping: missing host operand"
         else:
             host = arg_str.split()[0]
-            if (
-                host in [h["name"] for h in FAKE_NETWORK_HOSTS.values()]
-                or host in FAKE_NETWORK_HOSTS
-            ):
-                output = f"PING {host} (192.168.1.x) 56(84) bytes of data.\n"
-                for _ in range(4):
-                    output += f"64 bytes from {host}: icmp_seq={_ + 1} ttl=64 time={random.uniform(0.1, 2.0):.2f} ms\n"
-                output += f"\n--- {host} ping statistics ---\n4 packets transmitted, 4 received, 0% packet loss"
-            else:
-                output = f"ping: {host}: Name or service not known"
+            output = f"PING {host} ({host}) 56(84) bytes of data.\n"
+            for i in range(4):
+                output += f"64 bytes from {host}: icmp_seq={i + 1} ttl=64 time={random.uniform(0.1, 2.0):.2f} ms\n"
+            output += f"\n--- {host} ping statistics ---\n4 packets transmitted, 4 received, 0% packet loss"
             trigger_alert(
                 session_id,
                 "Network Command",
@@ -2880,6 +3075,65 @@ def process_command(
             client_ip,
             username,
         )
+    elif cmd_name == "hostname":
+        output = "honeypot"
+        trigger_alert(
+            session_id,
+            "Command Executed",
+            "Displayed hostname",
+            client_ip,
+            username,
+        )
+    elif cmd_name == "uptime":
+        output = get_dynamic_uptime()
+        trigger_alert(
+            session_id,
+            "Command Executed",
+            "Displayed system uptime",
+            client_ip,
+            username,
+        )
+    elif cmd_name == "df":
+        output = get_dynamic_df()
+        trigger_alert(
+            session_id,
+            "Command Executed",
+            "Displayed disk usage",
+            client_ip,
+            username,
+        )
+    elif cmd_name == "ps" or cmd_name == "get-process":
+        output = get_dynamic_ps()
+        trigger_alert(
+            session_id,
+            "Command Executed",
+            "Displayed process list",
+            client_ip,
+            username,
+        )
+    elif cmd_name == "netstat":
+        output = get_dynamic_netstat()
+        trigger_alert(
+            session_id,
+            "Command Executed",
+            "Displayed network stats",
+            client_ip,
+            username,
+        )
+    elif cmd_name == "get-service":
+        services = [
+            "ssh     running",
+            "nginx   running",
+            "mysql   stopped",
+        ]
+        output = "Service Name  Status\n" + "\n".join(services)
+        trigger_alert(
+            session_id,
+            "Command Executed",
+            "Displayed service list",
+            client_ip,
+            username,
+        )
     elif cmd_name == "top":
         output = get_dynamic_top()
         trigger_alert(
@@ -2968,6 +3222,58 @@ def process_command(
             session_id,
             "Service Command",
             f"Executed systemctl: {cmd}",
+            client_ip,
+            username,
+        )
+    elif cmd_name == "service":
+        if len(cmd_parts) >= 3:
+            svc = cmd_parts[1]
+            action = cmd_parts[2]
+            output = f"{svc} service {action}ed (simulated)"
+        else:
+            output = "service: usage: service <name> <action>"
+        trigger_alert(
+            session_id,
+            "Service Command",
+            f"Executed service: {cmd}",
+            client_ip,
+            username,
+        )
+    elif cmd_name == "iptables":
+        if "-L" in cmd_parts:
+            lines = ["Chain INPUT (policy ACCEPT)"]
+            for idx, rule in enumerate(IPTABLES_RULES, 1):
+                lines.append(f"{idx}: {rule['chain']} {rule['rule']}")
+            output = "\n".join(lines)
+        elif "-A" in cmd_parts or "-I" in cmd_parts:
+            try:
+                idx = cmd_parts.index("-A") if "-A" in cmd_parts else cmd_parts.index("-I")
+                chain = cmd_parts[idx + 1]
+                rule = " ".join(cmd_parts[idx + 2:])
+                IPTABLES_RULES.append({"chain": chain, "rule": rule})
+                output = "Rule added (simulated)"
+            except Exception:
+                output = "iptables: invalid rule"
+        elif "-D" in cmd_parts:
+            try:
+                idx = cmd_parts.index("-D")
+                chain = cmd_parts[idx + 1]
+                num = int(cmd_parts[idx + 2]) - 1
+                removed = False
+                for i, r in enumerate(IPTABLES_RULES):
+                    if i == num and r["chain"] == chain:
+                        IPTABLES_RULES.pop(i)
+                        removed = True
+                        break
+                output = "Rule deleted (simulated)" if removed else "No such rule"
+            except Exception:
+                output = "iptables: invalid rule"
+        else:
+            output = "iptables: command executed"
+        trigger_alert(
+            session_id,
+            "Firewall Command",
+            f"Executed iptables: {cmd}",
             client_ip,
             username,
         )
