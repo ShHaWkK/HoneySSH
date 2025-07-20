@@ -132,6 +132,8 @@ AVAILABLE_COMMANDS = [
     "helm",
     "docker-compose",
     "iptables",
+    "fortune",
+    "cowsay",
     "exit",
     "quit",
 ]
@@ -2775,10 +2777,21 @@ def process_command(
             output = "ping: missing host operand"
         else:
             host = arg_str.split()[0]
-            output = f"PING {host} ({host}) 56(84) bytes of data.\n"
+            header = f"PING {host} ({host}) 56(84) bytes of data."
+            lines = [header]
+            if allow_redirect:
+                chan.send((header + "\r\n").encode())
+                time.sleep(0.5)
             for i in range(4):
-                output += f"64 bytes from {host}: icmp_seq={i + 1} ttl=64 time={random.uniform(0.1, 2.0):.2f} ms\n"
-            output += f"\n--- {host} ping statistics ---\n4 packets transmitted, 4 received, 0% packet loss"
+                latency = random.uniform(0.1, 2.0)
+                line = f"64 bytes from {host}: icmp_seq={i + 1} ttl=64 time={latency:.2f} ms"
+                lines.append(line)
+                if allow_redirect:
+                    chan.send((line + "\r\n").encode())
+                    time.sleep(1)
+            stats = f"--- {host} ping statistics ---\n4 packets transmitted, 4 received, 0% packet loss"
+            lines.append(stats)
+            output = "\n".join(lines)
             trigger_alert(
                 session_id,
                 "Network Command",
@@ -3440,6 +3453,25 @@ def process_command(
             session_id,
             "Status Report",
             "Generated system status report",
+            client_ip,
+            username,
+        )
+    elif cmd_name == "fortune":
+        output = get_random_fortune()
+        trigger_alert(
+            session_id,
+            "Fortune",
+            "Displayed random fortune",
+            client_ip,
+            username,
+        )
+    elif cmd_name == "cowsay":
+        message = arg_str if arg_str else "Moo!"
+        output = cowsay(message)
+        trigger_alert(
+            session_id,
+            "Cowsay",
+            f"Displayed cowsay message: {message}",
             client_ip,
             username,
         )
