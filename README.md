@@ -21,3 +21,22 @@ python3 services/honey.py
 - Output redirection with `>` or `>>` to save command output into files
 
 This project is intended for educational and demonstration purposes only.
+
+### Docker Compose
+
+A `docker-compose.yml` is provided to run HoneySSH in a container. Start it with color output:
+
+```bash
+docker compose up --build --ansi always
+```
+
+The honeypot listens on port **2224**.
+
+### Interactive REPLs
+
+Inside an SSH session you can run:
+
+- `mysql` to enter a fake MySQL monitor with support for `SHOW`, `USE`, `DESCRIBE`, `SELECT`, `INSERT`, `UPDATE`, and `DELETE`.
+- `python` to open a minimal Python interpreter.
+
+These REPLs allow attackers to interact with the environment in a more realistic way.
