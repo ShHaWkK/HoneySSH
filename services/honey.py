@@ -2421,7 +2421,7 @@ def process_command(
             cmd_count,
             False,
         )
-        output, new_dir, jobs, cmd_count, should_exit = result
+        output, new_dir, jobs, cmd_count, _ = result
         if not redirect_path.startswith("/"):
             redirect_path = (
                 f"{current_dir}/{redirect_path}"
@@ -2433,7 +2433,7 @@ def process_command(
         content = existing if append_mode else ""
         content += output + ("\n" if output and not output.endswith("\n") else "")
         modify_file(fs, redirect_path, content, username, session_id, client_ip)
-        return "", new_dir, jobs, cmd_count, should_exit
+        return "", new_dir, jobs, cmd_count, False
 
     cmd_parts = cmd.strip().split()
     cmd_name = cmd_parts[0].lower()
@@ -2660,28 +2660,29 @@ def process_command(
                     f"{current_dir}/{arg_str}" if current_dir != "/" else f"/{arg_str}"
                 )
             path = os.path.normpath(path)
-            if path not in fs:
-                fs[path] = {
-                    "type": "dir",
-                    "contents": [],
-                    "owner": username,
-                    "permissions": "rwxr-xr-x",
-                    "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                parent_dir = "/".join(path.split("/")[:-1]) or "/"
-                if parent_dir in fs and "contents" in fs[parent_dir]:
-                    fs[parent_dir]["contents"].append(path.split("/")[-1])
-                save_filesystem(fs)
-                output = ""
-                trigger_alert(
-                    session_id,
-                    "Directory Created",
-                    f"Created directory {path}",
-                    client_ip,
-                    username,
-                )
-            else:
-                output = f"mkdir: cannot create directory '{arg_str}': File exists"
+            fs[path] = {
+                "type": "dir",
+                "contents": fs.get(path, {}).get("contents", []),
+                "owner": username,
+                "permissions": "rwxr-xr-x",
+                "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            parent_dir = os.path.dirname(path) or "/"
+            if (
+                parent_dir in fs
+                and "contents" in fs[parent_dir]
+                and os.path.basename(path) not in fs[parent_dir]["contents"]
+            ):
+                fs[parent_dir]["contents"].append(os.path.basename(path))
+            save_filesystem(fs)
+            output = ""
+            trigger_alert(
+                session_id,
+                "Directory Created",
+                f"Created directory {path}",
+                client_ip,
+                username,
+            )
     elif cmd_name == "rmdir":
         if not arg_str:
             output = "rmdir: missing operand"
@@ -3069,8 +3070,11 @@ def process_command(
             if p in fs and fs[p]["type"] == "dir" and "contents" in fs[p]:
                 for i, item in enumerate(fs[p]["contents"]):
                     full = f"{p}/{item}" if p != "/" else f"/{item}"
+                    if full not in fs:
+                        continue
                     connector = "└── " if i == len(fs[p]["contents"]) - 1 else "├── "
-                    lines.append(prefix + connector + item)
+                    name = f"{item}/" if fs[full]["type"] == "dir" else item
+                    lines.append(prefix + connector + name)
                     if fs[full]["type"] == "dir":
                         extension = (
                             "    " if i == len(fs[p]["contents"]) - 1 else "│   "
@@ -3100,31 +3104,29 @@ def process_command(
                     f"{current_dir}/{arg_str}" if current_dir != "/" else f"/{arg_str}"
                 )
             path = os.path.normpath(path)
-            if path.startswith("/tmp/"):
-                fs[path] = {
-                    "type": "file",
-                    "content": "",
-                    "owner": username,
-                    "permissions": "rw-r--r--",
-                    "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                if (
-                    "/tmp" in fs
-                    and "contents" in fs["/tmp"]
-                    and os.path.basename(path) not in fs["/tmp"]["contents"]
-                ):
-                    fs["/tmp"]["contents"].append(os.path.basename(path))
-                save_filesystem(fs)
-                output = ""
-                trigger_alert(
-                    session_id,
-                    "File Created",
-                    f"Created file: {path}",
-                    client_ip,
-                    username,
-                )
-            else:
-                output = f"touch: cannot touch '{arg_str}': Permission denied"
+            fs[path] = {
+                "type": "file",
+                "content": "",
+                "owner": username,
+                "permissions": "rw-r--r--",
+                "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            parent_dir = os.path.dirname(path) or "/"
+            if (
+                parent_dir in fs
+                and "contents" in fs[parent_dir]
+                and os.path.basename(path) not in fs[parent_dir]["contents"]
+            ):
+                fs[parent_dir]["contents"].append(os.path.basename(path))
+            save_filesystem(fs)
+            output = ""
+            trigger_alert(
+                session_id,
+                "File Created",
+                f"Created file: {path}",
+                client_ip,
+                username,
+            )
     elif cmd_name == "apt-get":
         if not arg_str:
             output = "apt-get: missing command"
