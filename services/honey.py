@@ -1818,10 +1818,32 @@ def send_periodic_report():
         if not has_recent_activity():
             continue
         report_filename = generate_report("15min")
-        body = f"15-Minute Activity Report - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        trigger_alert(-1, "15min Activity Report", body, "system", "system")
-        if os.path.exists(report_filename):
-            os.remove(report_filename)
+        subject = (
+            f"15-Minute System Report - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        body = "Attached is the latest 15-minute activity report."
+        msg = MIMEMultipart()
+        msg["From"] = ALERT_FROM
+        msg["To"] = ALERT_TO
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain"))
+        with open(report_filename, "rb") as f:
+            part = MIMEApplication(f.read(), Name=os.path.basename(report_filename))
+            part["Content-Disposition"] = (
+                f'attachment; filename="{os.path.basename(report_filename)}"'
+            )
+            msg.attach(part)
+        try:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
+                smtp.starttls()
+                smtp.login(SMTP_USER, SMTP_PASS)
+                smtp.send_message(msg)
+            print(f"Periodic report sent: {report_filename}")
+        except Exception as e:
+            print(f"Periodic report email error: {e}")
+        finally:
+            if os.path.exists(report_filename):
+                os.remove(report_filename)
 
 
 # Nettoyage des fichiers pièges
