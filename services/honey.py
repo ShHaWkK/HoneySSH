@@ -738,35 +738,6 @@ def get_realistic_git_push():
         "error: failed to push some refs to 'github.com:fake/repo.git'"
     )
 
-@lru_cache(maxsize=50)
-def get_random_fortune():
-    """Renvoie une petite citation amusante."""
-    fortunes = [
-        "La vie est trop courte pour de mauvaises commandes.",
-        "Un bug par jour éloigne le développeur de la paix.",
-        "Rien ne vaut un `sudo` bien placé.",
-        "Le meilleur code est celui que l'on ne tape pas.",
-        "Pensez à sauvegarder avant qu'il ne soit trop tard.",
-    ]
-    return random.choice(fortunes)
-
-
-def cowsay(message):
-    """Affiche un message dans un ASCII art de vache."""
-    width = min(max(len(message), 1), 40)
-    border = " " + "_" * (width + 2)
-    lines = [
-        border,
-        f"< {message.ljust(width)} >",
-        " " + "-" * (width + 2),
-        "        \\   ^__^",
-        "         \\  (oo)\\_______",
-        "            (__)\\       )\\/\\",
-        "                ||----w |",
-        "                ||     ||",
-    ]
-    return "\n".join(lines)
-
 
 # Gestion du système de fichiers
 def init_filesystem_db():
