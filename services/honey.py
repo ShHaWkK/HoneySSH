@@ -27,7 +27,6 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import hashlib
 import string
-import ipapi
 from io import StringIO
 
 # Configuration
@@ -665,6 +664,77 @@ def get_dev_null():
 def get_dev_zero():
     """Equivalent a /dev/zero, renvoie des octets nuls."""
     return "\0" * 1024
+
+
+@lru_cache(maxsize=10)
+def get_realistic_docker_ps():
+    """Genere une sortie ressemblant a 'docker ps'."""
+    lines = [
+        "CONTAINER ID   IMAGE          COMMAND                  CREATED          STATUS          PORTS                    NAMES",
+        "2f7b8c1d2e3f   nginx:latest   'nginx -g \"daemon off;\"'  2 hours ago      Up 2 hours      0.0.0.0:80->80/tcp       web",
+        "7c9d0e1f2a3b   postgres:13    'docker-entrypoint.s…'   3 hours ago      Up 3 hours      0.0.0.0:5432->5432/tcp   db",
+    ]
+    return "\r\n".join(lines)
+
+
+@lru_cache(maxsize=10)
+def get_realistic_docker_compose_up():
+    """Genere une sortie typee de 'docker-compose up'."""
+    return (
+        "Creating network \"myapp_default\" with the default driver\n"
+        "Creating volume \"myapp_db_data\" with default driver\n"
+        "Creating myapp_db_1 ... done\n"
+        "Creating myapp_web_1 ... done"
+    )
+
+
+@lru_cache(maxsize=10)
+def get_realistic_kubectl_get_pods():
+    """Genere une sortie ressemblant a 'kubectl get pods'."""
+    lines = [
+        "NAME                         READY   STATUS    RESTARTS   AGE",
+        "webserver-6d7ffbd4c8-wx4gm   1/1     Running   0          3d4h",
+        "database-0                   1/1     Running   0          3d4h",
+    ]
+    return "\r\n".join(lines)
+
+
+@lru_cache(maxsize=10)
+def get_realistic_helm_list():
+    """Genere une sortie pour 'helm list'."""
+    lines = [
+        "NAME       NAMESPACE  REVISION  UPDATED                                 STATUS    CHART                APP VERSION",
+        "nginx      default    1         2024-06-01 12:00:00.000000 +0000 UTC     deployed  nginx-8.9.1          1.25.2",
+        "postgres   default    2         2024-06-01 12:05:00.000000 +0000 UTC     deployed  postgresql-10.3.11   14.2.0",
+    ]
+    return "\r\n".join(lines)
+
+
+@lru_cache(maxsize=10)
+def get_realistic_git_status():
+    """Genere une sortie realiste pour 'git status'."""
+    return (
+        "On branch main\n"
+        "Your branch is up to date with 'origin/main'.\n\n"
+        "nothing to commit, working tree clean"
+    )
+
+
+@lru_cache(maxsize=10)
+def get_realistic_git_push():
+    """Genere une sortie realiste pour 'git push' echouant."""
+    return (
+        "Enumerating objects: 5, done.\n"
+        "Counting objects: 100% (5/5), done.\n"
+        "Delta compression using up to 8 threads\n"
+        "Compressing objects: 100% (3/3), done.\n"
+        "Writing objects: 100% (3/3), 291 bytes | 291.00 KiB/s, done.\n"
+        "Total 3 (delta 2), reused 0 (delta 0), pack-reused 0\n"
+        "remote: error: insufficient permissions\n"
+        "To github.com:fake/repo.git\n"
+        " ! [remote rejected] main -> main (permission denied)\n"
+        "error: failed to push some refs to 'github.com:fake/repo.git'"
+    )
 
 
 # Gestion du système de fichiers
@@ -1377,15 +1447,6 @@ def modify_file(fs, path, content, username, session_id, client_ip):
 def trigger_alert(session_id, event_type, details, client_ip, username):
     """Declenche une alerte et envoie un email si configure."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-    geo_info = "Unknown"
-    try:
-        geo_data = ipapi.location(client_ip)
-        geo_info = (
-            f"{geo_data.get('city', 'Unknown')}, {geo_data.get('country', 'Unknown')}"
-        )
-    except Exception:
-        pass
-    details = f"{details} (Geo: {geo_info})"
     print(
         f"\033[91m[ALERT]\033[0m {timestamp} {client_ip} {username}: {event_type} - {details}"
     )
@@ -1403,7 +1464,6 @@ def trigger_alert(session_id, event_type, details, client_ip, username):
                 f"- Utilisateur      : {username}\n"
                 f"- Adresse IP       : {client_ip}\n"
                 f"- Heure exacte     : {timestamp}\n"
-                f"- Géolocalisation  : {geo_info}\n"
                 f"- Session ID       : {session_id}\n\n"
                 f"Détails : {details}"
             )
@@ -2280,12 +2340,52 @@ def process_command(
     chan,
     jobs=None,
     cmd_count=0,
+    allow_redirect=True,
 ):
     """Traite une commande utilisateur et renvoie le resultat."""
     if not cmd.strip():
         return "", current_dir, jobs or [], cmd_count, False
     new_dir = current_dir
     output = ""
+
+    redirect_path = None
+    append_mode = False
+    if allow_redirect and ">" in cmd:
+        if ">>" in cmd:
+            base_cmd, redirect_path = cmd.split(">>", 1)
+            append_mode = True
+        else:
+            base_cmd, redirect_path = cmd.split(">", 1)
+        base_cmd = base_cmd.strip()
+        redirect_path = redirect_path.strip()
+        result = process_command(
+            base_cmd,
+            current_dir,
+            username,
+            fs,
+            client_ip,
+            session_id,
+            session_log,
+            command_history,
+            chan,
+            jobs,
+            cmd_count,
+            False,
+        )
+        output, new_dir, jobs, cmd_count, should_exit = result
+        if not redirect_path.startswith("/"):
+            redirect_path = (
+                f"{current_dir}/{redirect_path}"
+                if current_dir != "/"
+                else f"/{redirect_path}"
+            )
+        redirect_path = os.path.normpath(redirect_path)
+        existing = fs.get(redirect_path, {}).get("content", "")
+        content = existing if append_mode else ""
+        content += output + ("\n" if output and not output.endswith("\n") else "")
+        modify_file(fs, redirect_path, content, username, session_id, client_ip)
+        return "", new_dir, jobs, cmd_count, should_exit
+
     cmd_parts = cmd.strip().split()
     cmd_name = cmd_parts[0].lower()
     arg_str = " ".join(cmd_parts[1:]) if len(cmd_parts) > 1 else ""
@@ -3297,13 +3397,12 @@ def process_command(
         node_repl(chan, username, session_id, client_ip, session_log)
         return "", new_dir, jobs, cmd_count, False
     elif cmd_name == "git":
-        output = "On branch main\nYour branch is up to date with 'origin/main'.\n"
         if "push" in cmd_parts:
-            output += "remote: access denied"
+            output = get_realistic_git_push()
         elif "status" in cmd_parts:
-            output += "nothing to commit, working tree clean"
+            output = get_realistic_git_status()
         else:
-            output += "Everything up-to-date"
+            output = "Everything up-to-date"
         trigger_alert(
             session_id,
             "Git Command",
@@ -3311,21 +3410,51 @@ def process_command(
             client_ip,
             username,
         )
-    elif cmd_name in ["docker", "kubectl", "helm"]:
-        output = f"Listing {cmd_name} objects (simulated)"
+    elif cmd_name == "docker":
+        if "ps" in cmd_parts:
+            output = get_realistic_docker_ps()
+        else:
+            output = "Docker command executed"
         trigger_alert(
             session_id,
             "Container Command",
-            f"Executed {cmd_name}: {arg_str}",
+            f"Executed docker: {arg_str}",
+            client_ip,
+            username,
+        )
+    elif cmd_name == "kubectl":
+        if "get" in cmd_parts and "pods" in cmd_parts:
+            output = get_realistic_kubectl_get_pods()
+        else:
+            output = "Kubectl command executed"
+        trigger_alert(
+            session_id,
+            "Container Command",
+            f"Executed kubectl: {arg_str}",
+            client_ip,
+            username,
+        )
+    elif cmd_name == "helm":
+        if "list" in cmd_parts:
+            output = get_realistic_helm_list()
+        else:
+            output = "Helm command executed"
+        trigger_alert(
+            session_id,
+            "Container Command",
+            f"Executed helm: {arg_str}",
             client_ip,
             username,
         )
     elif cmd_name == "docker-compose":
-        output = "Bringing up services from docker-compose.yml (simulated)"
+        if "up" in cmd_parts:
+            output = get_realistic_docker_compose_up()
+        else:
+            output = "docker-compose command executed"
         trigger_alert(
             session_id,
             "Container Command",
-            "Executed docker-compose up",
+            f"Executed docker-compose: {arg_str}",
             client_ip,
             username,
         )
