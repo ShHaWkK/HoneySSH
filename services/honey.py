@@ -1226,8 +1226,6 @@ def get_completions(current_input, current_dir, username, fs, history):
             "rmdir",
             "cp",
             "mv",
-            "vim",
-            "nano",
             "backup_data",
             "systemctl",
             "fg",
@@ -3243,52 +3241,6 @@ def process_command(
             client_ip,
             username,
         )
-    elif cmd_name == "vim":
-        chan.send(b"Entering vim mode... Press :q to exit\r\n")
-        while True:
-            vim_input, jobs, _ = read_line_advanced(
-                chan,
-                ":",
-                history=command_history,
-                current_dir=current_dir,
-                username=username,
-                fs=fs,
-                session_log=session_log,
-                session_id=session_id,
-                client_ip=client_ip,
-                jobs=jobs,
-                cmd_count=cmd_count,
-            )
-            if vim_input.strip() == ":q":
-                break
-            trigger_alert(
-                session_id, "Vim Input", f"Input: {vim_input}", client_ip, username
-            )
-        chan.send(b"\r\n")
-        return "", new_dir, jobs, cmd_count, False
-    elif cmd_name == "nano":
-        chan.send(b"Entering nano mode... Press Ctrl+D to exit\r\n")
-        while True:
-            nano_input, jobs, _ = read_line_advanced(
-                chan,
-                "",
-                history=command_history,
-                current_dir=current_dir,
-                username=username,
-                fs=fs,
-                session_log=session_log,
-                session_id=session_id,
-                client_ip=client_ip,
-                jobs=jobs,
-                cmd_count=cmd_count,
-            )
-            if nano_input == "\x04":
-                break
-            trigger_alert(
-                session_id, "Nano Input", f"Input: {nano_input}", client_ip, username
-            )
-        chan.send(b"\r\n")
-        return "", new_dir, jobs, cmd_count, False
     elif cmd_name == "backup_data":
         output = "Backing up data to /tmp/backup.tar.gz (simulated)..."
         fs["/tmp/backup.tar.gz"] = {
