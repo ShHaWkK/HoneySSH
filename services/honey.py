@@ -290,6 +290,7 @@ FAKE_MYSQL_DATA = {
             "rows": [
                 (1, "admin", "hunter2"),
                 (2, "guest", "guestpass"),
+                (3, "john", "secret123"),
             ],
         },
         "access_logs": {
@@ -297,6 +298,15 @@ FAKE_MYSQL_DATA = {
             "rows": [
                 (1, "admin", "2024-01-01 00:00:00"),
                 (2, "guest", "2024-01-01 01:00:00"),
+                (3, "john", "2024-01-02 12:34:00"),
+            ],
+        },
+        "employees": {
+            "columns": ["id", "name", "department"],
+            "rows": [
+                (1, "Alice", "IT"),
+                (2, "Bob", "HR"),
+                (3, "Charlie", "Finance"),
             ],
         },
     },
@@ -306,6 +316,7 @@ FAKE_MYSQL_DATA = {
             "rows": [
                 (1, "login"),
                 (2, "logout"),
+                (3, "unauthorized"),
             ],
         },
         "connections": {
@@ -313,6 +324,15 @@ FAKE_MYSQL_DATA = {
             "rows": [
                 (1, "192.168.1.10"),
                 (2, "192.168.1.20"),
+                (3, "192.168.1.30"),
+            ],
+        },
+        "sys_logs": {
+            "columns": ["id", "level", "message"],
+            "rows": [
+                (1, "INFO", "System boot"),
+                (2, "WARN", "High load"),
+                (3, "ERROR", "Disk failure"),
             ],
         },
     },
@@ -322,7 +342,14 @@ FAKE_MYSQL_DATA = {
             "rows": [
                 ("FLAG{dummy_flag}",),
             ],
-        }
+        },
+        "users": {
+            "columns": ["id", "username", "hash"],
+            "rows": [
+                (1, "root", "5f4dcc3b5aa765d61d8327deb882cf99"),
+                (2, "service", "5ebe2294ecd0e0f08eab7690d2a6ee69"),
+            ],
+        },
     },
 }
 

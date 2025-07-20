@@ -1,0 +1,10 @@
+version: '3'
+services:
+  honeyssh:
+    build: .
+    container_name: honeyssh
+    tty: true
+    environment:
+      - COMPOSE_FORCE_COLOR=1
+    ports:
+      - "2224:2224"
