@@ -3609,6 +3609,21 @@ def process_command(
             client_ip,
             username,
         )
+    elif cmd_name == "echo":
+        args = cmd_parts[1:]
+        newline = True
+        if args and args[0] == "-n":
+            newline = False
+            args = args[1:]
+        text = " ".join(arg.strip("'\"") for arg in args)
+        output = text + ("" if not newline else "\n")
+        trigger_alert(
+            session_id,
+            "Command Executed",
+            f"Executed echo with args: {args}",
+            client_ip,
+            username,
+        )
     else:
         output = f"{cmd_name}: command not found"
         trigger_alert(
