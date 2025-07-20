@@ -18,5 +18,7 @@ python3 services/honey.py
 - Enhanced FTP client with directory management and file transfers
 - Service management via `service` and `systemctl`
 - Interactive `mysql` monitor supporting `SELECT`, `DESCRIBE`, `INSERT`, `UPDATE`, and `DELETE`
+- Output redirection with `>` or `>>` to save command output into files
+- Fun extras: `fortune` for a random quote and `cowsay` for ASCII art
 
 This project is intended for educational and demonstration purposes only.
