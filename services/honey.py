@@ -3779,8 +3779,10 @@ def process_command(
 def _read_escape_sequence(chan):
     """Lit une sequence d'echappement provenant du terminal."""
     seq = ""
+    # Utilise un delai un peu plus long pour laisser le temps aux caracteres de
+    # la sequence d'arriver lorsque les touches sont frappees rapidement.
     while True:
-        readable, _, _ = select.select([chan], [], [], 0.01)
+        readable, _, _ = select.select([chan], [], [], 0.05)
         if not readable:
             break
         try:
@@ -3871,13 +3873,9 @@ def read_line_advanced(
                 elif data == "\x04":  # Ctrl+D
                     chan.send(b"logout\r\n")
                     return "exit", jobs, cmd_count
-                elif data in [
-                    "\x1b[A",
-                    "\x1b[B",
-                    "\x1b[C",
-                    "\x1b[D",
-                ]:  # Flèches directionnelles
-                    if data == "\x1b[A":  # Flèche haut
+                elif re.match(r"\x1b\[[0-9;]*[ABCD]$", data):  # Flèches directionnelles
+                    key = data[-1]
+                    if key == "A":  # Flèche haut
                         if history_index > 0:
                             history_index -= 1
                             buffer = (
@@ -3886,7 +3884,7 @@ def read_line_advanced(
                                 else ""
                             )
                             pos = len(buffer)
-                    elif data == "\x1b[B":  # Flèche bas
+                    elif key == "B":  # Flèche bas
                         if history_index < len(history):
                             history_index += 1
                             buffer = (
@@ -3895,10 +3893,10 @@ def read_line_advanced(
                                 else ""
                             )
                             pos = len(buffer)
-                    elif data == "\x1b[C":  # Flèche droite
+                    elif key == "C":  # Flèche droite
                         if pos < len(buffer):
                             pos += 1
-                    elif data == "\x1b[D":  # Flèche gauche
+                    elif key == "D":  # Flèche gauche
                         if pos > 0:
                             pos -= 1
                     redraw_line()
