@@ -3815,6 +3815,13 @@ def read_line_advanced(
     history_index = len(history)
     last_completions = []
     tab_count = 0
+
+    def redraw_line():
+        """Redessine la ligne et place le curseur au bon endroit."""
+        chan.send(b"\r\033[K" + prompt.encode() + buffer.encode())
+        diff = len(buffer) - pos
+        if diff > 0:
+            chan.send(f"\033[{diff}D".encode())
     while True:
         readable, _, _ = select.select([chan], [], [], 0.1)
         if readable:
@@ -3843,15 +3850,13 @@ def read_line_advanced(
                         tab_count,
                         prompt,
                     )
-                    chan.send(
-                        b"\r" + b" " * 100 + b"\r" + prompt.encode() + buffer.encode()
-                    )
+                    redraw_line()
                     pos = len(buffer)
                 elif data == "\x7f" or data == "\x08":  # Backspace (DEL or BS)
                     if pos > 0:
                         buffer = buffer[: pos - 1] + buffer[pos:]
                         pos -= 1
-                        chan.send(b"\b \b")
+                        redraw_line()
                     last_completions = []
                     tab_count = 0
                 elif data == "\x03":  # Ctrl+C
@@ -3896,15 +3901,13 @@ def read_line_advanced(
                     elif data == "\x1b[D":  # Flèche gauche
                         if pos > 0:
                             pos -= 1
-                    chan.send(
-                        b"\r" + b" " * 100 + b"\r" + prompt.encode() + buffer.encode()
-                    )
+                    redraw_line()
                     last_completions = []
                     tab_count = 0
                 elif len(data) == 1 and ord(data) >= 32:  # Caractères imprimables
                     buffer = buffer[:pos] + data + buffer[pos:]
                     pos += 1
-                    chan.send(data.encode())
+                    redraw_line()
                     last_completions = []
                     tab_count = 0
             except UnicodeDecodeError:
