@@ -136,6 +136,52 @@ AVAILABLE_COMMANDS = [
     "cowsay",
     "exit",
     "quit",
+    "less",
+    "more",
+    "head",
+    "tail",
+    "sed",
+    "awk",
+    "cut",
+    "sort",
+    "uniq",
+    "vim",
+    "nano",
+    "tar",
+    "gzip",
+    "gunzip",
+    "zip",
+    "unzip",
+    "dd",
+    "htop",
+    "journalctl",
+    "vmstat",
+    "iostat",
+    "free",
+    "ifconfig",
+    "netstat",
+    "route",
+    "arping",
+    "mtr",
+    "users",
+    "groups",
+    "last",
+    "lastb",
+    "apt",
+    "apt-cache",
+    "snap",
+    "flatpak",
+    "date",
+    "env",
+    "printenv",
+    "export",
+    "cron",
+    "crontab",
+    "mount",
+    "df",
+    "ssh-keygen",
+    "alias",
+    "unalias",
 ]
 
 # Commandes interdites renvoyant une erreur de droits
@@ -167,6 +213,11 @@ FORBIDDEN_COMMANDS = [
     "bootrec",
     "icacls",
     "takeown",
+    "dd",
+    "snap",
+    "flatpak",
+    "mount",
+    "ssh-keygen",
 ]
 
 
@@ -396,6 +447,52 @@ COMMAND_OPTIONS = {
     "helm": ["list"],
     "docker-compose": ["up", "down"],
     "iptables": ["-L", "-A", "-D", "-I"],
+    "less": ["+F", "-N", "--help"],
+    "more": ["--help"],
+    "head": ["-n", "--help"],
+    "tail": ["-n", "-f", "--help"],
+    "sed": ["-n", "-e", "-i"],
+    "awk": ["-F", "-v"],
+    "cut": ["-d", "-f"],
+    "sort": ["-r", "-n"],
+    "uniq": ["-c", "-d"],
+    "vim": [],
+    "nano": [],
+    "tar": ["-xvf", "-cvf"],
+    "gzip": ["-d", "-k"],
+    "gunzip": ["-c", "-f"],
+    "zip": ["-r"],
+    "unzip": ["-l", "-o"],
+    "dd": ["if=", "of=", "bs="],
+    "htop": ["-d", "-p"],
+    "journalctl": ["-u", "-f", "-n"],
+    "vmstat": ["-s", "-d"],
+    "iostat": ["-x", "-d"],
+    "free": ["-h"],
+    "ifconfig": [],
+    "netstat": ["-r"],
+    "route": [],
+    "arping": [],
+    "mtr": [],
+    "users": [],
+    "groups": [],
+    "last": [],
+    "lastb": [],
+    "apt": ["update", "upgrade", "install", "remove"],
+    "apt-cache": ["search", "show"],
+    "snap": ["install", "remove", "list"],
+    "flatpak": ["install", "remove", "list"],
+    "date": ["+%F", "+%T"],
+    "env": [],
+    "printenv": [],
+    "export": [],
+    "cron": [],
+    "crontab": ["-l", "-e"],
+    "mount": ["-t", "-o"],
+    "df": ["-h"],
+    "ssh-keygen": ["-t", "-f"],
+    "alias": [],
+    "unalias": [],
 }
 
 # Minimal manual pages for built-in commands
@@ -1288,6 +1385,33 @@ def get_completions(current_input, current_dir, username, fs, history):
     partial = parts[-1] if parts else ""
     prev_parts = parts[:-1] if len(parts) > 1 else []
     completions = []
+
+    redirect_match = re.search(r"(?:>>|>)\s*(\S*)$", current_input)
+    if redirect_match:
+        partial_path = redirect_match.group(1)
+        base_path = (
+            partial_path
+            if partial_path.startswith("/")
+            else (f"{current_dir}/{partial_path}" if current_dir != "/" else f"/{partial_path}")
+        )
+        path = os.path.normpath(base_path)
+        if not partial_path or partial_path.endswith("/"):
+            parent_dir = path
+            base_name = ""
+        else:
+            parent_dir = os.path.dirname(path) or "/"
+            base_name = os.path.basename(path)
+        if parent_dir in fs and fs[parent_dir]["type"] == "dir" and "contents" in fs[parent_dir]:
+            for item in fs[parent_dir]["contents"]:
+                full_path = f"{parent_dir}/{item}" if parent_dir != "/" else f"/{item}"
+                if full_path in fs and item.startswith(base_name):
+                    completions.append(item)
+        prefix = (
+            partial_path
+            if partial_path.endswith("/")
+            else (partial_path.rsplit("/", 1)[0] + "/") if "/" in partial_path else ""
+        )
+        return sorted([f"{prefix}{c}" for c in completions])
     if len(parts) == 1 and not current_input.endswith(" "):
         completions = [c for c in base_cmds if c.startswith(partial)]
         return sorted(completions)
