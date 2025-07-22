@@ -1510,6 +1510,7 @@ def autocomplete(
     """Gere l'autocompletion facon bash pour la saisie utilisateur."""
     last_completions = last_completions or []
     completions = get_completions(current_input, current_dir, username, fs, history)
+
     parts = current_input.split()
     partial = ""
     if current_input.endswith(" "):
@@ -1522,53 +1523,65 @@ def autocomplete(
         p.append(word)
         return " ".join(p)
 
-    # If only one completion, apply it directly
+    if not completions:
+        return current_input, [], 0
+
+    path_cmds = [
+        "cd",
+        "ls",
+        "cat",
+        "rm",
+        "scp",
+        "find",
+        "grep",
+        "touch",
+        "mkdir",
+        "rmdir",
+        "cp",
+        "mv",
+    ]
+
+    # Second TAB: show completions if nothing changed
+    if tab_count > 0 and completions == last_completions:
+        chan.send(b"\r\n")
+        display_list = []
+        for c in completions:
+            norm = os.path.normpath(f"{current_dir}/{c}" if not c.startswith("/") else c)
+            if norm in fs and fs[norm]["type"] == "dir":
+                disp = f"\033[01;34m{c}\033[0m/"
+            else:
+                disp = c
+            display_list.append(disp)
+        max_len = max(_visible_len(it) for it in display_list) + 2
+        per_row = max(1, 80 // max_len)
+        for i, it in enumerate(display_list):
+            pad = max_len - _visible_len(it)
+            chan.send((it + " " * pad).encode())
+            if (i + 1) % per_row == 0:
+                chan.send(b"\r\n")
+        if len(display_list) % per_row:
+            chan.send(b"\r\n")
+        chan.send(b"\r" + prompt.encode() + current_input.encode())
+        return current_input, completions, 0
+
     if len(completions) == 1:
         completion = completions[0]
         cmd = parts[0] if parts else ""
         path = completion
-        if cmd in [
-            "cd",
-            "ls",
-            "cat",
-            "rm",
-            "scp",
-            "find",
-            "grep",
-            "touch",
-            "mkdir",
-            "rmdir",
-            "cp",
-            "mv",
-        ]:
+        if cmd in path_cmds:
             if not completion.startswith("/"):
                 path = os.path.normpath(
-                    f"{current_dir}/{completion}"
-                    if current_dir != "/"
-                    else f"/{completion}"
+                    f"{current_dir}/{completion}" if current_dir != "/" else f"/{completion}"
                 )
             if path in fs and fs[path]["type"] == "dir":
                 completion += "/"
         return _apply_completion(completion), [], 0
 
-    if completions:
-        common = os.path.commonprefix(completions)
-        if common and common != partial:
-            return _apply_completion(common), completions, 1
-        if last_completions == completions and tab_count:
-            chan.send(b"\r\n")
-            max_len = max(_visible_len(c) for c in completions) + 2
-            per_row = max(1, 80 // max_len)
-            for i, c in enumerate(completions):
-                chan.send(c.ljust(max_len).encode())
-                if (i + 1) % per_row == 0:
-                    chan.send(b"\r\n")
-            if len(completions) % per_row:
-                chan.send(b"\r\n")
-            chan.send(prompt.encode() + current_input.encode())
-            return current_input, completions, 0
-        return current_input, completions, 1
-    return current_input, [], 0
+    common = os.path.commonprefix(completions)
+    if common and common != partial:
+        return _apply_completion(common), completions, 1
+
+    return current_input, completions, 1
 
 
 # Gestion des fichiers
@@ -2108,6 +2121,8 @@ def ftp_session(chan, host, username, session_id, client_ip, session_log):
             jobs,
             cmd_count,
         )
+        if ftp_cmd is None:
+            break
         if not ftp_cmd:
             continue
         parts = ftp_cmd.strip().split()
@@ -2267,6 +2282,8 @@ def mysql_session(chan, username, session_id, client_ip, session_log):
             jobs,
             cmd_count,
         )
+        if line is None:
+            break
         if not line:
             continue
         if line.strip().lower() in ["exit", "quit", "\\q"]:
@@ -2437,9 +2454,12 @@ def python_repl(chan, username, session_id, client_ip, session_log):
             jobs,
             cmd_count,
         )
-        if not line or line.strip() in ["exit()", "quit()", "exit", "quit"]:
+        if line is None or line.strip() in ["exit()", "quit()", "exit", "quit"]:
             chan.send(b"\r\n")
             break
+        if not line:
+            chan.send(b"\r\n")
+            continue
         chan.send(f"{line}\r\n".encode())
     session_log.append("Python REPL closed")
 
@@ -2464,9 +2484,12 @@ def node_repl(chan, username, session_id, client_ip, session_log):
             jobs,
             cmd_count,
         )
-        if not line or line.strip() in ["exit", "quit"]:
+        if line is None or line.strip() in ["exit", "quit"]:
             chan.send(b"\r\n")
             break
+        if not line:
+            chan.send(b"\r\n")
+            continue
         chan.send(f"{line}\r\n".encode())
     session_log.append("Node REPL closed")
 
@@ -2494,8 +2517,10 @@ def netcat_session(chan, listening, host, port, username, session_id, client_ip,
             jobs,
             cmd_count,
         )
-        if not line or line.strip().lower() in ["exit", "quit"]:
+        if line is None or line.strip().lower() in ["exit", "quit"]:
             break
+        if not line:
+            continue
         chan.send(f"{line}\r\n".encode())
     chan.send(b"\r\n")
     session_log.append("Netcat session closed")
@@ -3838,7 +3863,7 @@ def read_line_advanced(
             try:
                 data = chan.recv(1).decode("utf-8", errors="ignore")
                 if not data:
-                    return "", jobs, cmd_count
+                    return None, jobs, cmd_count
                 if data == "\x1b":
                     data += _read_escape_sequence(chan)
                 log_activity(session_id, client_ip, username, data)
@@ -3997,8 +4022,10 @@ def handle_ssh_session(chan, client_ip, username, session_id, transport):
                 jobs,
                 cmd_count,
             )
-            if not cmd or cmd == "exit":
+            if cmd is None or cmd in ["exit", "logout"]:
                 break
+            if cmd == "":
+                continue
 
             command_index = cmd_count + 1
             start_time = datetime.now().isoformat()
