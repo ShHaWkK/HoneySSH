@@ -1506,10 +1506,11 @@ def autocomplete(
     last_completions=None,
     tab_count=0,
     prompt="",
-):
+): 
     """Gere l'autocompletion facon bash pour la saisie utilisateur."""
     last_completions = last_completions or []
     completions = get_completions(current_input, current_dir, username, fs, history)
+
     parts = current_input.split()
     partial = ""
     if current_input.endswith(" "):
@@ -1522,53 +1523,64 @@ def autocomplete(
         p.append(word)
         return " ".join(p)
 
-    # If only one completion, apply it directly
+    if not completions:
+        return current_input, [], 0
+
+    path_cmds = [
+        "cd",
+        "ls",
+        "cat",
+        "rm",
+        "scp",
+        "find",
+        "grep",
+        "touch",
+        "mkdir",
+        "rmdir",
+        "cp",
+        "mv",
+    ]
+
+    # Second TAB: show completions if nothing changed
+    if tab_count and completions == last_completions:
+        chan.send(b"\r\n")
+        display_list = []
+        for c in completions:
+            norm = os.path.normpath(f"{current_dir}/{c}" if not c.startswith("/") else c)
+            if norm in fs and fs[norm]["type"] == "dir":
+                display_list.append(c + "/")
+            else:
+                display_list.append(c)
+        max_len = max(_visible_len(it) for it in display_list) + 2
+        per_row = max(1, 80 // max_len)
+        for i, it in enumerate(display_list):
+            chan.send(it.ljust(max_len).encode())
+            if (i + 1) % per_row == 0:
+                chan.send(b"\r\n")
+        if len(display_list) % per_row:
+            chan.send(b"\r\n")
+        chan.send(b"\r" + prompt.encode() + current_input.encode())
+        return current_input, completions, 0
+
+    common = os.path.commonprefix(completions)
+
     if len(completions) == 1:
         completion = completions[0]
         cmd = parts[0] if parts else ""
         path = completion
-        if cmd in [
-            "cd",
-            "ls",
-            "cat",
-            "rm",
-            "scp",
-            "find",
-            "grep",
-            "touch",
-            "mkdir",
-            "rmdir",
-            "cp",
-            "mv",
-        ]:
+        if cmd in path_cmds:
             if not completion.startswith("/"):
                 path = os.path.normpath(
-                    f"{current_dir}/{completion}"
-                    if current_dir != "/"
-                    else f"/{completion}"
+                    f"{current_dir}/{completion}" if current_dir != "/" else f"/{completion}"
                 )
             if path in fs and fs[path]["type"] == "dir":
                 completion += "/"
         return _apply_completion(completion), [], 0
 
-    if completions:
-        common = os.path.commonprefix(completions)
-        if common and common != partial:
-            return _apply_completion(common), completions, 1
-        if last_completions == completions and tab_count:
-            chan.send(b"\r\n")
-            max_len = max(_visible_len(c) for c in completions) + 2
-            per_row = max(1, 80 // max_len)
-            for i, c in enumerate(completions):
-                chan.send(c.ljust(max_len).encode())
-                if (i + 1) % per_row == 0:
-                    chan.send(b"\r\n")
-            if len(completions) % per_row:
-                chan.send(b"\r\n")
-            chan.send(prompt.encode() + current_input.encode())
-            return current_input, completions, 0
-        return current_input, completions, 1
-    return current_input, [], 0
+    if common and common != partial:
+        return _apply_completion(common), completions, 1
+
+    return current_input, completions, 1
 
 
 # Gestion des fichiers
