@@ -3782,7 +3782,7 @@ def _read_escape_sequence(chan):
     # Utilise un delai un peu plus long pour laisser le temps aux caracteres de
     # la sequence d'arriver lorsque les touches sont frappees rapidement.
     while True:
-        readable, _, _ = select.select([chan], [], [], 0.05)
+        readable, _, _ = select.select([chan], [], [], 0.1)
         if not readable:
             break
         try:
@@ -3824,10 +3824,10 @@ def read_line_advanced(
 
     def redraw_line():
         """Redessine la ligne et place le curseur au bon endroit."""
-        chan.send(b"\r\033[K" + prompt.encode() + buffer.encode())
+        # Efface toute la ligne actuelle puis reaffiche le prompt et le buffer
+        chan.send(b"\r\x1b[2K" + prompt.encode() + buffer.encode())
         diff = len(buffer) - pos
         if diff > 0:
-            chan.send(f"\033[{diff}D".encode())
     while True:
         readable, _, _ = select.select([chan], [], [], 0.1)
         if readable:
