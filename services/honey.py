@@ -3792,7 +3792,11 @@ def _read_escape_sequence(chan):
         if not ch:
             break
         seq += ch
+        # Les sequences ESC O[A-D] utilisent deux lettres. On continue donc
+        # apres le premier 'O' pour recuperer la lettre finale.
         if ch.isalpha() or ch == "~":
+            if seq == "O":
+                continue
             break
     return seq
 
@@ -3873,7 +3877,7 @@ def read_line_advanced(
                 elif data == "\x04":  # Ctrl+D
                     chan.send(b"logout\r\n")
                     return "exit", jobs, cmd_count
-                elif re.match(r"\x1b\[[0-9;]*[ABCD]$", data):  # Flèches directionnelles
+                elif re.match(r"\x1b\[[0-9;]*[ABCD]$", data) or re.match(r"\x1bO[ABCD]$", data):  # Flèches directionnelles
                     key = data[-1]
                     if key == "A":  # Flèche haut
                         if history_index > 0:
