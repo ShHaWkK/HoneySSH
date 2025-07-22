@@ -1548,13 +1548,15 @@ def autocomplete(
         for c in completions:
             norm = os.path.normpath(f"{current_dir}/{c}" if not c.startswith("/") else c)
             if norm in fs and fs[norm]["type"] == "dir":
-                display_list.append(c + "/")
+                disp = f"\033[01;34m{c}\033[0m/"
             else:
-                display_list.append(c)
+                disp = c
+            display_list.append(disp)
         max_len = max(_visible_len(it) for it in display_list) + 2
         per_row = max(1, 80 // max_len)
         for i, it in enumerate(display_list):
-            chan.send(it.ljust(max_len).encode())
+            pad = max_len - _visible_len(it)
+            chan.send((it + " " * pad).encode())
             if (i + 1) % per_row == 0:
                 chan.send(b"\r\n")
         if len(display_list) % per_row:
@@ -1562,7 +1564,6 @@ def autocomplete(
         chan.send(b"\r" + prompt.encode() + current_input.encode())
         return current_input, completions, 0
 
-    common = os.path.commonprefix(completions)
     if len(completions) == 1:
         completion = completions[0]
         cmd = parts[0] if parts else ""
@@ -2120,6 +2121,8 @@ def ftp_session(chan, host, username, session_id, client_ip, session_log):
             jobs,
             cmd_count,
         )
+        if ftp_cmd is None:
+            break
         if not ftp_cmd:
             continue
         parts = ftp_cmd.strip().split()
@@ -2279,6 +2282,8 @@ def mysql_session(chan, username, session_id, client_ip, session_log):
             jobs,
             cmd_count,
         )
+        if line is None:
+            break
         if not line:
             continue
         if line.strip().lower() in ["exit", "quit", "\\q"]:
@@ -2449,9 +2454,12 @@ def python_repl(chan, username, session_id, client_ip, session_log):
             jobs,
             cmd_count,
         )
-        if not line or line.strip() in ["exit()", "quit()", "exit", "quit"]:
+        if line is None or line.strip() in ["exit()", "quit()", "exit", "quit"]:
             chan.send(b"\r\n")
             break
+        if not line:
+            chan.send(b"\r\n")
+            continue
         chan.send(f"{line}\r\n".encode())
     session_log.append("Python REPL closed")
 
@@ -2476,9 +2484,12 @@ def node_repl(chan, username, session_id, client_ip, session_log):
             jobs,
             cmd_count,
         )
-        if not line or line.strip() in ["exit", "quit"]:
+        if line is None or line.strip() in ["exit", "quit"]:
             chan.send(b"\r\n")
             break
+        if not line:
+            chan.send(b"\r\n")
+            continue
         chan.send(f"{line}\r\n".encode())
     session_log.append("Node REPL closed")
 
@@ -2506,8 +2517,10 @@ def netcat_session(chan, listening, host, port, username, session_id, client_ip,
             jobs,
             cmd_count,
         )
-        if not line or line.strip().lower() in ["exit", "quit"]:
+        if line is None or line.strip().lower() in ["exit", "quit"]:
             break
+        if not line:
+            continue
         chan.send(f"{line}\r\n".encode())
     chan.send(b"\r\n")
     session_log.append("Netcat session closed")
@@ -3850,7 +3863,7 @@ def read_line_advanced(
             try:
                 data = chan.recv(1).decode("utf-8", errors="ignore")
                 if not data:
-                    return "", jobs, cmd_count
+                    return None, jobs, cmd_count
                 if data == "\x1b":
                     data += _read_escape_sequence(chan)
                 log_activity(session_id, client_ip, username, data)
@@ -4009,8 +4022,10 @@ def handle_ssh_session(chan, client_ip, username, session_id, transport):
                 jobs,
                 cmd_count,
             )
-            if not cmd or cmd == "exit":
+            if cmd is None or cmd in ["exit", "logout"]:
                 break
+            if cmd == "":
+                continue
 
             command_index = cmd_count + 1
             start_time = datetime.now().isoformat()
