@@ -3779,10 +3779,12 @@ def process_command(
 def _read_escape_sequence(chan):
     """Lit une sequence d'echappement provenant du terminal."""
     seq = ""
-    # Utilise un delai un peu plus long pour laisser le temps aux caracteres de
-    # la sequence d'arriver lorsque les touches sont frappees rapidement.
-    while True:
-        readable, _, _ = select.select([chan], [], [], 0.1)
+    # Attend jusqu'a 200 ms pour capturer l'ensemble de la sequence
+    # afin d'eviter la troncature lors d'une frappe rapide sur les fleches.
+    end_time = time.time() + 0.2
+    while time.time() < end_time:
+        timeout = max(0, end_time - time.time())
+        readable, _, _ = select.select([chan], [], [], timeout)
         if not readable:
             break
         try:
@@ -3828,6 +3830,8 @@ def read_line_advanced(
         chan.send(b"\r\x1b[2K" + prompt.encode() + buffer.encode())
         diff = len(buffer) - pos
         if diff > 0:
+            # Replace the cursor if we are editing in the middle of the buffer
+            chan.send(f"\x1b[{diff}D".encode())
     while True:
         readable, _, _ = select.select([chan], [], [], 0.1)
         if readable:
@@ -3888,6 +3892,7 @@ def read_line_advanced(
                                 else ""
                             )
                             pos = len(buffer)
+                        redraw_line()
                     elif key == "B":  # Flèche bas
                         if history_index < len(history):
                             history_index += 1
@@ -3897,13 +3902,19 @@ def read_line_advanced(
                                 else ""
                             )
                             pos = len(buffer)
+                        else:
+                            history_index = len(history)
+                            buffer = ""
+                            pos = 0
+                        redraw_line()
                     elif key == "C":  # Flèche droite
                         if pos < len(buffer):
                             pos += 1
+                            chan.send(b"\x1b[C")
                     elif key == "D":  # Flèche gauche
                         if pos > 0:
                             pos -= 1
-                    redraw_line()
+                            chan.send(b"\x1b[D")
                     last_completions = []
                     tab_count = 0
                 elif len(data) == 1 and ord(data) >= 32:  # Caractères imprimables
