@@ -3828,7 +3828,6 @@ def read_line_advanced(
         chan.send(b"\r\x1b[2K" + prompt.encode() + buffer.encode())
         diff = len(buffer) - pos
         if diff > 0:
-            chan.send(f"\x1b[{diff}D".encode())
     while True:
         readable, _, _ = select.select([chan], [], [], 0.1)
         if readable:
