@@ -1542,7 +1542,7 @@ def autocomplete(
     ]
 
     # Second TAB: show completions if nothing changed
-    if tab_count and completions == last_completions:
+    if tab_count > 0 and completions == last_completions:
         chan.send(b"\r\n")
         display_list = []
         for c in completions:
@@ -1563,7 +1563,6 @@ def autocomplete(
         return current_input, completions, 0
 
     common = os.path.commonprefix(completions)
-
     if len(completions) == 1:
         completion = completions[0]
         cmd = parts[0] if parts else ""
@@ -1577,6 +1576,7 @@ def autocomplete(
                 completion += "/"
         return _apply_completion(completion), [], 0
 
+    common = os.path.commonprefix(completions)
     if common and common != partial:
         return _apply_completion(common), completions, 1
 
