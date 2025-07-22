@@ -1506,7 +1506,7 @@ def autocomplete(
     last_completions=None,
     tab_count=0,
     prompt="",
-):
+): 
     """Gere l'autocompletion facon bash pour la saisie utilisateur."""
     last_completions = last_completions or []
     completions = get_completions(current_input, current_dir, username, fs, history)
@@ -1562,6 +1562,7 @@ def autocomplete(
         chan.send(b"\r" + prompt.encode() + current_input.encode())
         return current_input, completions, 0
 
+    common = os.path.commonprefix(completions)
     if len(completions) == 1:
         completion = completions[0]
         cmd = parts[0] if parts else ""
