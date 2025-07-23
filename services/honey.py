@@ -3876,9 +3876,16 @@ def read_line_advanced(
         readable, _, _ = select.select([chan], [], [], 0.1)
         if readable:
             try:
-                data = chan.recv(1).decode("utf-8", errors="ignore")
-                if not data:
+                raw = chan.recv(1)
+                if not raw:
                     return None, jobs, cmd_count
+                try:
+                    data = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    try:
+                        data = raw.decode("latin-1")
+                    except Exception:
+                        continue
                 if data == "\x1b":
                     data += _read_escape_sequence(chan)
                 log_activity(session_id, client_ip, username, data)
@@ -3959,7 +3966,7 @@ def read_line_advanced(
                             chan.send(b"\x1b[D")
                     last_completions = []
                     tab_count = 0
-                elif len(data) == 1 and ord(data) >= 32:  # Caractères imprimables
+                elif len(data) == 1 and 32 <= ord(data) <= 255:  # Caractères imprimables
                     buffer = buffer[:pos] + data + buffer[pos:]
                     pos += 1
                     redraw_line()
