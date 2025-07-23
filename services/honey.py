@@ -1561,7 +1561,7 @@ def autocomplete(
                 chan.send(b"\r\n")
         if len(display_list) % per_row:
             chan.send(b"\r\n")
-        chan.send(b"\r" + prompt.encode() + current_input.encode())
+        chan.send(b"\r" + prompt.encode() + current_input.encode() + b"\x1b[K")
         return current_input, completions, 0
 
     if len(completions) == 1:
@@ -1579,6 +1579,11 @@ def autocomplete(
 
     common = os.path.commonprefix(completions)
     if common and common != partial:
+        path = os.path.normpath(
+            f"{current_dir}/{common}" if not common.startswith("/") else common
+        )
+        if path in fs and fs[path]["type"] == "dir":
+            common += "/"
         return _apply_completion(common), completions, 1
 
     return current_input, completions, 1
@@ -2333,13 +2338,15 @@ def mysql_session(chan, username, session_id, client_ip, session_log):
                 chan.send(b"Empty set (0.00 sec)\r\n")
         elif cmd_l.startswith("select") and "from" in cmd_l:
             parts = mysql_cmd.split()
-            if "from" in [p.lower() for p in parts]:
-                table = parts[parts.index("from") + 1]
+            parts_lc = [p.lower() for p in parts]
+            if "from" in parts_lc:
+                table = parts[parts_lc.index("from") + 1]
                 db = current_db
                 if "." in table:
                     db, table = table.split(".", 1)
-                if db in FAKE_MYSQL_DATA and table in FAKE_MYSQL_DATA[db]:
-                    data = FAKE_MYSQL_DATA[db][table]
+                table_lc = table.lower()
+                if db in FAKE_MYSQL_DATA and table_lc in FAKE_MYSQL_DATA[db]:
+                    data = FAKE_MYSQL_DATA[db][table_lc]
                     cols = data["columns"]
                     rows = data["rows"]
                     border = "+" + "+".join(["-" * (len(c) + 2) for c in cols]) + "+"
@@ -2439,7 +2446,7 @@ def python_repl(chan, username, session_id, client_ip, session_log):
     history = []
     jobs = []
     cmd_count = 0
-    chan.send(b"Python 3.10.0 (default, fake)\r\nType 'exit()' to quit\r\n>>> ")
+    chan.send(b"Python 3.10.0 (default, fake)\r\nType 'exit()' to quit\r\n")
     while True:
         line, _, _ = read_line_advanced(
             chan,
@@ -2454,13 +2461,21 @@ def python_repl(chan, username, session_id, client_ip, session_log):
             jobs,
             cmd_count,
         )
-        if line is None or line.strip() in ["exit()", "quit()", "exit", "quit"]:
+        if line is None:
+            break
+        if line.strip() in ["exit()", "quit()", "exit", "quit"]:
             chan.send(b"\r\n")
             break
         if not line:
             chan.send(b"\r\n")
             continue
-        chan.send(f"{line}\r\n".encode())
+        if any(ord(ch) < 32 for ch in line):
+            display = "".join(
+                f"^{chr(ord(ch)+64)}" if ord(ch) < 32 else ch for ch in line
+            )
+            chan.send(f"{display}\r\n".encode())
+        else:
+            chan.send(f"{line}\r\n".encode())
     session_log.append("Python REPL closed")
 
 
@@ -3885,8 +3900,10 @@ def read_line_advanced(
                         tab_count,
                         prompt,
                     )
-                    redraw_line()
                     pos = len(buffer)
+                    chan.send(
+                        b"\r" + prompt.encode() + buffer.encode() + b"\x1b[K"
+                    )
                 elif data == "\x7f" or data == "\x08":  # Backspace (DEL or BS)
                     if pos > 0:
                         buffer = buffer[: pos - 1] + buffer[pos:]
