@@ -1597,6 +1597,7 @@ def modify_file(fs, path, content, username, session_id, client_ip):
         for f in PREDEFINED_USERS.get(username, {}).get("files", {}).keys()
     ]
     if path.startswith("/tmp/") or path in allowed_paths:
+        is_new = path not in fs
         fs[path] = {
             "type": "file",
             "content": content,
@@ -1604,9 +1605,24 @@ def modify_file(fs, path, content, username, session_id, client_ip):
             "permissions": "rw-r--r--",
             "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
-        trigger_alert(
-            session_id, "File Modified", f"Modified file: {path}", client_ip, username
-        )
+        ext = os.path.splitext(path)[1]
+        watched_exts = {".py", ".sh", ".c", ".cpp", ".rs", ".js", ".rb", ".go", ".pl"}
+        if is_new and ext in watched_exts:
+            trigger_alert(
+                session_id,
+                "Script Creation",
+                f"Created code file: {path}",
+                client_ip,
+                username,
+            )
+        else:
+            trigger_alert(
+                session_id,
+                "File Modified",
+                f"Modified file: {path}",
+                client_ip,
+                username,
+            )
         save_filesystem(fs)
         return True
     return False
@@ -1881,30 +1897,62 @@ def generate_report(period):
         0,
         1,
     )
+    pdf.ln(5)
     try:
         with sqlite3.connect(DB_NAME, uri=True) as conn:
             cur = conn.cursor()
+
+            # Login attempts summary
             cur.execute(
-                "SELECT COUNT(*) FROM login_attempts WHERE timestamp > ?", (start_time,)
+                "SELECT COUNT(*) FROM login_attempts WHERE timestamp > ?",
+                (start_time,),
             )
             login_count = cur.fetchone()[0]
-            pdf.cell(0, 10, f"Total Login Attempts: {login_count}", 0, 1)
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 10, "Login Attempts", 0, 1)
+            pdf.set_font("Arial", size=12)
+            pdf.cell(0, 10, f"Total: {login_count}", 0, 1)
+
             cur.execute(
                 "SELECT ip, COUNT(*) as count FROM login_attempts WHERE timestamp > ? GROUP BY ip ORDER BY count DESC LIMIT 5",
                 (start_time,),
             )
             for ip, count in cur.fetchall():
-                pdf.cell(0, 10, f"IP: {ip} - {count} attempts", 0, 1)
+                pdf.cell(0, 10, f"{ip} - {count} attempts", 0, 1)
+            pdf.ln(2)
+
+            # Command usage summary
             cur.execute(
                 "SELECT command, COUNT(*) as count FROM commands WHERE timestamp > ? GROUP BY command ORDER BY count DESC LIMIT 5",
                 (start_time,),
             )
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 10, "Top Commands", 0, 1)
+            pdf.set_font("Arial", size=12)
             for cmd, count in cur.fetchall():
-                pdf.cell(0, 10, f"Command: {cmd} - {count} executions", 0, 1)
+                pdf.cell(0, 10, f"{cmd} - {count} executions", 0, 1)
+            pdf.ln(2)
+
+            # Event counts by type
+            cur.execute(
+                "SELECT event_type, COUNT(*) as count FROM events WHERE timestamp > ? GROUP BY event_type ORDER BY count DESC",
+                (start_time,),
+            )
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 10, "Event Counts", 0, 1)
+            pdf.set_font("Arial", size=12)
+            for event_type, count in cur.fetchall():
+                pdf.cell(0, 10, f"{event_type}: {count}", 0, 1)
+            pdf.ln(2)
+
+            # Recent events
             cur.execute(
                 "SELECT timestamp, ip, username, event_type, details FROM events WHERE timestamp > ? ORDER BY timestamp DESC LIMIT 10",
                 (start_time,),
             )
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 10, "Recent Events", 0, 1)
+            pdf.set_font("Arial", size=12)
             for timestamp, ip, username, event_type, details in cur.fetchall():
                 pdf.cell(
                     0,
@@ -2195,6 +2243,16 @@ def ftp_session(chan, host, username, session_id, client_ip, session_log):
                 "permissions": "rw-r--r--",
                 "mtime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
+            ext = os.path.splitext(dest)[1]
+            watched_exts = {".py", ".sh", ".c", ".cpp", ".rs", ".js", ".rb", ".go", ".pl"}
+            if ext in watched_exts:
+                trigger_alert(
+                    session_id,
+                    "Script Creation",
+                    f"Created code file: {dest}",
+                    client_ip,
+                    username,
+                )
             parent = os.path.dirname(dest) or "/"
             name = os.path.basename(dest)
             if parent in FS and name not in FS[parent]["contents"]:
@@ -2556,10 +2614,49 @@ def process_command(
     allow_redirect=True,
 ):
     """Traite une commande utilisateur et renvoie le resultat."""
+    jobs = jobs or []
     if not cmd.strip():
-        return "", current_dir, jobs or [], cmd_count, False
+        return "", current_dir, jobs, cmd_count, False
     new_dir = current_dir
     output = ""
+
+    # --- Bloc de blocage d'exécution de code source ---
+    watched_exts = {".py", ".sh", ".c", ".cpp", ".rs", ".js", ".rb", ".go", ".pl"}
+    parts = cmd.strip().split()
+    if parts:
+        run_cmd = parts[0]
+        if run_cmd.startswith("./"):
+            _, ext = os.path.splitext(run_cmd)
+            if ext in watched_exts:
+                return (
+                    f"{run_cmd}: Permission non accordée",
+                    current_dir,
+                    jobs,
+                    cmd_count,
+                    False,
+                )
+
+        interpreters = {
+            "python",
+            "sh",
+            "bash",
+            "gcc",
+            "rustc",
+            "go",
+            "node",
+            "ruby",
+            "perl",
+        }
+        if run_cmd in interpreters and len(parts) > 1:
+            _, ext = os.path.splitext(parts[1])
+            if ext in watched_exts:
+                return (
+                    f"{run_cmd}: Permission non accordée pour {parts[1]}",
+                    current_dir,
+                    jobs,
+                    cmd_count,
+                    False,
+                )
 
     redirect_path = None
     append_mode = False
@@ -3284,13 +3381,24 @@ def process_command(
                 fs[parent_dir]["contents"].append(os.path.basename(path))
             save_filesystem(fs)
             output = ""
-            trigger_alert(
-                session_id,
-                "File Created",
-                f"Created file: {path}",
-                client_ip,
-                username,
-            )
+            ext = os.path.splitext(path)[1]
+            watched_exts = {".py", ".sh", ".c", ".cpp", ".rs", ".js", ".rb", ".go", ".pl"}
+            if ext in watched_exts:
+                trigger_alert(
+                    session_id,
+                    "Script Creation",
+                    f"Created code file: {path}",
+                    client_ip,
+                    username,
+                )
+            else:
+                trigger_alert(
+                    session_id,
+                    "File Created",
+                    f"Created file: {path}",
+                    client_ip,
+                    username,
+                )
     elif cmd_name == "apt-get":
         if not arg_str:
             output = "apt-get: missing command"
