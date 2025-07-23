@@ -28,6 +28,7 @@ from functools import lru_cache
 import hashlib
 import string
 from io import StringIO
+import fnmatch
 
 # Configuration
 HOST = ""  # Écoute sur toutes les interfaces
@@ -218,6 +219,10 @@ FORBIDDEN_COMMANDS = [
     "flatpak",
     "mount",
     "ssh-keygen",
+    "useradd",
+    "adduser",
+    "groupadd",
+    "passwd",
 ]
 
 
@@ -2121,6 +2126,24 @@ def _random_permissions():
     return random.choice(patterns)
 
 
+def has_wildcards(path: str) -> bool:
+    """Return True if the path contains wildcard characters."""
+    return any(ch in path for ch in ["*", "?", "[", "]"])
+
+
+def expand_wildcards(arg, current_dir, fs, username):
+    """Expand wildcard patterns against the simulated filesystem."""
+    if not has_wildcards(arg):
+        return [arg]
+    if arg.startswith("~"):
+        arg = arg.replace("~", f"/home/{username}", 1)
+    if not arg.startswith("/"):
+        arg = f"{current_dir}/{arg}" if current_dir != "/" else f"/{arg}"
+    pattern = os.path.normpath(arg)
+    matches = sorted(p for p in fs if fnmatch.fnmatch(p, pattern))
+    return matches if matches else [arg]
+
+
 def ftp_session(chan, host, username, session_id, client_ip, session_log):
     """Emule une session FTP interactive avancee."""
     history = []
@@ -2697,6 +2720,11 @@ def process_command(
         return "", new_dir, jobs, cmd_count, False
 
     cmd_parts = cmd.strip().split()
+    if cmd_parts and cmd_parts[0].lower() != "find":
+        expanded = [cmd_parts[0]]
+        for a in cmd_parts[1:]:
+            expanded.extend(expand_wildcards(a, current_dir, fs, username))
+        cmd_parts = expanded
     cmd_name = cmd_parts[0].lower()
     arg_str = " ".join(cmd_parts[1:]) if len(cmd_parts) > 1 else ""
     jobs = jobs or []
@@ -3256,39 +3284,47 @@ def process_command(
         if not arg_str:
             output = "find: missing argument"
         else:
-            path = arg_str.split()[-1] if arg_str else current_dir
-            if path.startswith("~"):
-                path = path.replace("~", f"/home/{username}", 1)
-            if not path.startswith("/"):
-                path = f"{current_dir}/{path}" if current_dir != "/" else f"/{path}"
-            path = os.path.normpath(path)
-            if path in fs and fs[path]["type"] == "dir" and "contents" in fs[path]:
+            parts = arg_str.split()
+            start = current_dir
+            pattern = None
+            idx = 0
+            if parts and not parts[0].startswith("-"):
+                start = parts[0]
+                idx = 1
+            while idx < len(parts):
+                if parts[idx] == "-name" and idx + 1 < len(parts):
+                    pattern = parts[idx + 1].strip("'\"")
+                    idx += 2
+                else:
+                    idx += 1
+            if start.startswith("~"):
+                start = start.replace("~", f"/home/{username}", 1)
+            if not start.startswith("/"):
+                start = f"{current_dir}/{start}" if current_dir != "/" else f"/{start}"
+            start = os.path.normpath(start)
+            if start in fs and fs[start]["type"] == "dir" and "contents" in fs[start]:
                 results = []
 
                 def recursive_find(p):
-                    """Fonction interne pour parcourir l'arborescence de fichiers."""
                     for item in fs[p]["contents"]:
                         full_path = f"{p}/{item}" if p != "/" else f"/{item}"
                         if full_path in fs:
-                            if "-name" in arg_str and item in arg_str:
+                            if pattern is None or fnmatch.fnmatch(item, pattern):
                                 results.append(full_path)
-                            if (
-                                fs[full_path]["type"] == "dir"
-                                and "contents" in fs[full_path]
-                            ):
+                            if fs[full_path]["type"] == "dir" and "contents" in fs[full_path]:
                                 recursive_find(full_path)
 
-                recursive_find(path)
+                recursive_find(start)
                 output = "\n".join(results)
                 trigger_alert(
                     session_id,
                     "Command Executed",
-                    f"Executed find in {path}",
+                    f"Executed find in {start}",
                     client_ip,
                     username,
                 )
             else:
-                output = f"find: '{path}': No such file or directory"
+                output = f"find: '{start}': No such file or directory"
     elif cmd_name == "grep":
         if not arg_str:
             output = "grep: missing pattern"
